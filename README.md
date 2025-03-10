@@ -24,9 +24,9 @@ Important: The kernel must have been compiled with ptp 1588 clock and i2c algobi
 GIT SUBMODULES
 ==============
 
-After checking out, you need to edit the file kernel_module/igb/avb-config.h.
+After checking out, you need to edit the file `avb_up.sh`.
 
-Edit the values of OWN_MAC, AVB_DEVICE_SOURCE_MAC and AVB_DEVICE_TALKER_MAC_BASE to match your NIC and the AVB device.
+Edit the values of OWNMAC, SOURCEMAC and TALKERMAC to match your NIC and the AVB device.
 
 Now the avb-linux git repository submodules should be configured:
 

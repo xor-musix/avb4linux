@@ -63,6 +63,10 @@ char DMAC[] = { 0x91, 0xe0, 0xf0, 0x01, 0x00, 0x00 };  // for ADP and AECP
 
 #define MCAST_BASE MAAP_LOCALLY_ADMINISTRATORED_BASE
 
+uint64_t avb_device_talker_mac_base;
+uint64_t avb_device_source_mac;
+uint64_t own_mac;
+
 uint32_t samplerate = 48000;
 
 uint64_t ENTITY_ID;
@@ -1095,21 +1099,21 @@ void handle_acmp_get_rx_state_command(int sock, char *buffer, int len)
 
     struct jdksavdecc_eui64 stream_id;
 
-    uint64_t uint64_remote_stream_id = mac_to_stream_id(AVB_DEVICE_SOURCE_MAC, 0);
+    uint64_t uint64_remote_stream_id = mac_to_stream_id(avb_device_source_mac, 0);
 
     jdksavdecc_eui64_init_from_uint64(&stream_id, uint64_remote_stream_id);
     jdksavdecc_common_control_header_set_stream_id(stream_id, buffer, HEADER_OFFSET);
     
     struct jdksavdecc_eui64 talker_entity_id;
 
-    uint64_t uint64_remote_talker_entity_id = mac_to_entity_id(AVB_DEVICE_SOURCE_MAC);
+    uint64_t uint64_remote_talker_entity_id = mac_to_entity_id(avb_device_source_mac);
 
     jdksavdecc_eui64_init_from_uint64(&talker_entity_id, uint64_remote_talker_entity_id);
     jdksavdecc_acmpdu_set_talker_entity_id(talker_entity_id, buffer, HEADER_OFFSET);
 
     struct jdksavdecc_eui48 dst_mac;
 
-    uint64_t uint64_remote_destination_mac = AVB_DEVICE_TALKER_MAC_BASE;
+    uint64_t uint64_remote_destination_mac = avb_device_talker_mac_base;
 
     jdksavdecc_eui48_init_from_uint64(&dst_mac, uint64_remote_destination_mac);
     jdksavdecc_acmpdu_set_stream_dest_mac(dst_mac, buffer, HEADER_OFFSET);
@@ -1303,6 +1307,12 @@ void *handle_22f0_msg(void *arg)
      return NULL;
 }
 
+uint64_t parse_mac(const char *mac_str) {
+   uint64_t mac = 0;
+   sscanf(mac_str, "%12lx", &mac);
+   return mac;
+}
+
 int main(int argc, char **argv)
 {
    struct sockaddr mac;
@@ -1311,9 +1321,9 @@ int main(int argc, char **argv)
    uint32_t bytes_per_sample = 4;
    uint32_t samples_per_interval = 6;
 
-   if (argc < 3)
+   if (argc < 6)
    {
-      printf("usage: avb-user <name of ethernet interface> <samplerate>\n");
+      printf("usage: avb-user <name of ethernet interface> <samplerate> <avb device talker mac base> <avb device source mac> <i210 own mac>\n");
       exit(1);
    }
 
@@ -1340,6 +1350,10 @@ int main(int argc, char **argv)
           exit(1);
      }
 
+   avb_device_talker_mac_base = parse_mac(argv[3]);
+   avb_device_source_mac = parse_mac(argv[4]);
+   own_mac = parse_mac(argv[5]);
+
    /* initialize MAC address */
 
    memcpy(MAC, &mac.sa_data, MACLEN);
@@ -1351,9 +1365,9 @@ int main(int argc, char **argv)
    MODEL_ID = 1;
    GRANDMASTER_ID = mac_to_entity_id(own_mac_address);
 
-   REMOTE_ENTITY_ID = mac_to_entity_id(AVB_DEVICE_SOURCE_MAC);
-   REMOTE_TALKER_ID = mac_to_entity_id(AVB_DEVICE_SOURCE_MAC);
-   REMOTE_LISTENER_ID = mac_to_entity_id(AVB_DEVICE_SOURCE_MAC);
+   REMOTE_ENTITY_ID = mac_to_entity_id(avb_device_source_mac);
+   REMOTE_TALKER_ID = mac_to_entity_id(avb_device_source_mac);
+   REMOTE_LISTENER_ID = mac_to_entity_id(avb_device_source_mac);
 
    uint8_t ix_stream[8];
    uint8_t ix_mac[6];
@@ -1403,8 +1417,8 @@ int main(int argc, char **argv)
 
    jdksavdecc_eui64_init_from_uint64(&controller_guid, CONTROLLER_ID);
 
-   uint64_to_array6(AVB_DEVICE_TALKER_MAC_BASE, ix_mac);
-   uint64_to_array8(AVB_DEVICE_SOURCE_MAC << 16, ix_stream);
+   uint64_to_array6(avb_device_talker_mac_base, ix_mac);
+   uint64_to_array8(avb_device_source_mac << 16, ix_stream);
 
    uint64_to_array6(MCAST_BASE, ox_mac);
    uint64_to_array8(own_mac_address << 16, ox_stream);

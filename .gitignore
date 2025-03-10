@@ -1,0 +1,12 @@
+jdksavdecc-c/
+daemons/
+tools/
+*.o
+*.o.d
+*.cmd
+*.a
+*.ko
+*.mod
+*.symvers
+*.order
+*.mod.c

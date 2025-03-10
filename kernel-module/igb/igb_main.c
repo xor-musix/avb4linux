@@ -86,6 +86,12 @@
 
 #include "alsa.h"
 
+#include "avb-config.h"
+
+uint64_t avb_device_talker_mac_base;
+uint64_t avb_device_source_mac;
+uint64_t own_mac;
+
 char igb_driver_name[] = "igb_avb";
 char igb_driver_version[] = DRV_VERSION;
 static const char igb_driver_string[] =
@@ -321,7 +327,7 @@ static void igb_init_dmac(struct igb_adapter *adapter, u32 pba);
 /* user-mode IO API registrations */
 static struct file_operations igb_fops = {
 		.owner   = THIS_MODULE,
-		.llseek  = no_llseek,
+		.llseek  = noop_llseek,
 		.read	= igb_read,
 		.write   = igb_write,
 		.poll	= igb_pollfd,
@@ -432,6 +438,24 @@ static int samplerate = 48000; /*default value*/
 module_param(samplerate, int, 0);
 MODULE_PARM_DESC(samplerate, "Tx Ring size passed in insmod parameter");
 
+static char *avb_device_talker_mac_base_parm = "91e0f000ae53"; /*default value*/
+module_param(avb_device_talker_mac_base_parm, charp, 0);
+MODULE_PARM_DESC(avb_device_talker_mac_base_parm, "AVB Device Talker MAC Base Address");
+
+static char *avb_device_source_mac_parm = "0001f2014ea9"; /*default value*/
+module_param(avb_device_source_mac_parm, charp, 0);
+MODULE_PARM_DESC(avb_device_source_mac_parm, "AVB Device Source MAC Address");
+
+static char *own_mac_parm = "a08cfdc31602"; /*default value*/
+module_param(own_mac_parm, charp, 0);
+MODULE_PARM_DESC(own_mac_parm, "AVB I210 Own MAC Address");
+
+uint64_t parse_mac(const char *mac_str) {
+    uint64_t mac = 0;
+    sscanf(mac_str, "%12lx", &mac);
+    return mac;
+}
+
 /**
  * igb_init_module - Driver Registration Routine
  *
@@ -446,6 +470,14 @@ static int __init igb_init_module(void)
 	       igb_driver_string, igb_driver_version);
 
 	pr_info("%s\n", igb_copyright);
+
+	printk(KERN_INFO "AVB Device Talker MAC Base: %s\n", avb_device_talker_mac_base_parm);
+	avb_device_talker_mac_base = parse_mac(avb_device_talker_mac_base_parm);
+	printk(KERN_INFO "AVB Device Source MAC: %s\n", avb_device_source_mac_parm);
+	avb_device_source_mac = parse_mac(avb_device_source_mac_parm);
+	printk(KERN_INFO "AVB I210 Own MAC: %s\n", own_mac_parm);
+	own_mac = parse_mac(own_mac_parm);
+
 #ifdef IGB_HWMON
 /* only use IGB_PROCFS if IGB_HWMON is not defined */
 #else

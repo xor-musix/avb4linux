@@ -362,8 +362,8 @@ static int snd_avb_new_pcm(struct igb_adapter *adapter)
         u8 stream_id[8];
 
         u64_to_array6(OWN_TALKER_MAC_BASE, dest);
-        u64_to_array6(OWN_MAC, src);
-        u64_to_array8(OWN_MAC << 16, stream_id);
+        u64_to_array6(own_mac, src);
+        u64_to_array8(own_mac << 16, stream_id);
 
         printk(KERN_INFO "creating new pcm avb\n");
         err = snd_pcm_new(adapter->card, "AVB", 0, 1, 1, &pcm);
@@ -559,8 +559,8 @@ int snd_avb_probe(struct igb_adapter *adapter, int samplerate)
         /* setup flex filter */
         /* directs the AVB input stream to i210's rx-queue-1 */
 
-        u64_to_array6(AVB_DEVICE_TALKER_MAC_BASE, &filter[0]);
-        u64_to_array6(AVB_DEVICE_SOURCE_MAC, &filter[6]);
+        u64_to_array6(avb_device_talker_mac_base, &filter[0]);
+        u64_to_array6(avb_device_source_mac, &filter[6]);
 
         igb_setup_flex_filter(adapter, 1, 0, sizeof(filter), filter, filter_mask);
 
