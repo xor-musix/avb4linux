@@ -24,10 +24,6 @@ Important: The kernel must have been compiled with ptp 1588 clock and i2c algobi
 GIT SUBMODULES
 ==============
 
-After checking out, you need to edit the file `avb_up.sh`.
-
-Edit the values of OWNMAC, SOURCEMAC and TALKERMAC to match your NIC and the AVB device.
-
 Now the avb-linux git repository submodules should be configured:
 
     git submodule init
@@ -45,16 +41,19 @@ And build
     make
     sudo make install
 
-The 'sudo make install' will create the directory $HOME/.avb and copy the binaries and kernel-module there
-The bash scripts 'avb_up.sh' and 'avb_down.sh' are copied to /usr/local/bin
+The `sudo make install` will create the directory `$HOME/.avb` and copy the binaries and kernel-module there
+The bash scripts `avb_up.sh` and `avb_down.sh` are copied to `/usr/local/bin`.
+
+Before you start, you need to edit the file `avb_up.sh`.
+Edit the values of `OWNMAC`, `SOURCEMAC` and `TALKERMAC` to match your NIC and the AVB device. Here is a quick guide on [how to determine the correct MAC addresses](https://sonicarts.ucsd.edu/resources/index.html).
 
 To start, enter in a console:
 
-sudo avb_up.sh \<ethernet interface name\> \<samplerate\>
+    sudo avb_up.sh \<ethernet interface name\> \<samplerate\>
 
 To stop
 
-sudo avb_down.sh \<ethernet interface name\>
+    sudo avb_down.sh \<ethernet interface name\>
 
 RELATED OPEN SOURCE PROJECTS
 ============================
