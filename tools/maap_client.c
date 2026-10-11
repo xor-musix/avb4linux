@@ -32,10 +32,6 @@
 
 ******************************************************************************/
 
-/*
- * simple MAAP client
- */
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -50,12 +46,18 @@
 
 #include <pthread.h>
 #include <poll.h>
+#include <time.h>
 
+#include <avb_log.h>
 #include <maap_client.h>
 
-/* global defines */
-
 #define MAAP_PORT_DEFAULT 15364
+
+#define MAAP_DYNAMIC_POOL_BASE 0x91E0F0000000ULL
+#define MAAP_DYNAMIC_POOL_SIZE 0xFE00
+
+#define MAAP_INIT_TIMEOUT_MS    2000
+#define MAAP_ACQUIRE_TIMEOUT_MS 4000
 
 static int sock_fd;
 
@@ -95,6 +97,36 @@ int receive_maap_response(Maap_Notify* response)
 	return recv(sock_fd, response, sizeof(Maap_Notify), 0);
 }
 
+static int wait_for_notify(Maap_Notify* response, int timeout_ms)
+{
+	struct pollfd pfd;
+	int rc;
+
+	if (sock_fd == -1 || response == NULL)
+		return -1;
+
+	pfd.fd = sock_fd;
+	pfd.events = POLLIN;
+	rc = poll(&pfd, 1, timeout_ms);
+	if (rc < 0) {
+		avb_log(L_AVDECC, LOG_WARNING, "MAAP: poll failed: %s", strerror(errno));
+		return -1;
+	}
+	if (rc == 0)
+		return 0;
+
+	rc = receive_maap_response(response);
+	if (rc < 0) {
+		avb_log(L_AVDECC, LOG_WARNING, "MAAP: failed to receive response");
+		return -1;
+	}
+	if (rc != sizeof(*response)) {
+		avb_log(L_AVDECC, LOG_WARNING, "MAAP: short response (%d bytes)", rc);
+		return -1;
+	}
+	return 1;
+}
+
 int maap_client_init(struct maap_record* ctx)
 {
 	struct sockaddr_in addr;
@@ -103,21 +135,12 @@ int maap_client_init(struct maap_record* ctx)
 	struct addrinfo hints, *ai, *p;
 	int ret;
 
-	fd_set master, read_fds;
-	int fdmax;
-
-	char recvbuffer[200];
-	int recvbytes;
-	Maap_Cmd recvcmd;
-	int exit_received = 0;
-
-	/* Create a localhost socket. */
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags = 0;
 	if ((ret = getaddrinfo("localhost", "15364", &hints, &ai)) != 0) {
-		printf("getaddrinfo failure %s", gai_strerror(ret));
+		avb_log(L_AVDECC, LOG_WARNING, "MAAP: getaddrinfo failure %s", gai_strerror(ret));
 		return -1;
 	}
 
@@ -136,63 +159,174 @@ int maap_client_init(struct maap_record* ctx)
 	}
 
 	if (p == NULL) {
-		printf("Unable to connect to the daemon, error %d (%s)", errno, strerror(errno));
+		avb_log(L_AVDECC, LOG_WARNING, "MAAP: Unable to connect to the daemon, error %d (%s)", errno, strerror(errno));
 		freeaddrinfo(ai);
 		return -1;
 	}
 
 	freeaddrinfo(ai);
 
-	Maap_Cmd cmd;
-        Maap_Notify response;
+	{
+		Maap_Cmd cmd;
+		Maap_Notify response;
+		int wrc;
 
-        cmd.kind = MAAP_CMD_INIT;
-        cmd.id = 0;
-        cmd.start = ctx->base;
-        cmd.count = ctx->count;
+		memset(&cmd, 0, sizeof(cmd));
+		cmd.kind  = MAAP_CMD_INIT;
+		cmd.start = MAAP_DYNAMIC_POOL_BASE;
+		cmd.count = MAAP_DYNAMIC_POOL_SIZE;
 
-        errno = 0;
+		if (send_maap_cmd(&cmd) < 0) {
+			avb_log(L_AVDECC, LOG_WARNING, "MAAP: failed to send INIT command");
+			close(sock_fd); sock_fd = -1;
+			return -1;
+		}
 
-        rc = send_maap_cmd(&cmd);
-        rc = receive_maap_response(&response);
+		wrc = wait_for_notify(&response, MAAP_INIT_TIMEOUT_MS);
+		if (wrc <= 0) {
+			avb_log(L_AVDECC, LOG_WARNING, "MAAP: no INITIALIZED response from daemon");
+			close(sock_fd); sock_fd = -1;
+			return -1;
+		}
+		if (response.kind != MAAP_NOTIFY_INITIALIZED ||
+		    (response.result != MAAP_NOTIFY_ERROR_NONE &&
+		     response.result != MAAP_NOTIFY_ERROR_ALREADY_INITIALIZED)) {
+			avb_log(L_AVDECC, LOG_WARNING,
+			        "MAAP: INIT rejected (kind %d, error %d)",
+			        response.kind, response.result);
+			close(sock_fd); sock_fd = -1;
+			return -1;
+		}
+		avb_log(L_AVDECC, LOG_INFO,
+		        "MAAP: daemon pool 0x%012llx size 0x%x",
+		        (unsigned long long)response.start, response.count);
+	}
 
-        if (response.result != MAAP_NOTIFY_ERROR_NONE && 
-            response.result != MAAP_NOTIFY_ERROR_ALREADY_INITIALIZED)
-        {
-           return -1;
-        }
+	ctx->base = 0;
+	if (ctx->count == 0)
+		ctx->count = 1;
 
-        cmd.kind = MAAP_CMD_RESERVE;
-        cmd.id = 1;
-        cmd.start = ctx->base;
-        cmd.count = ctx->count;
+	return 0;
+}
 
-        rc = send_maap_cmd(&cmd);
-        rc = receive_maap_response(&response);
-
-        if (response.result != MAAP_NOTIFY_ERROR_NONE && 
-            response.result != MAAP_NOTIFY_ERROR_RESERVE_NOT_AVAILABLE)
-        {
-           printf("error: %d\n", response.result);
-           return -1;
-        }
-
-        cmd.start = ctx->base = response.start;
-        cmd.count = ctx->count = response.count;
-
-	return rc;
-
- out:	if (sock_fd != -1)
-		close(sock_fd);
-	sock_fd = -1;
-	return -1;
+static int ms_until(const struct timespec* deadline)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (int)((deadline->tv_sec  - now.tv_sec) * 1000 +
+                 (deadline->tv_nsec - now.tv_nsec) / 1000000L);
 }
 
 int maap_acquire_adresses(struct maap_record* ctx)
 {
+    Maap_Cmd cmd;
+    Maap_Notify response;
+    struct timespec deadline;
+
+    if (sock_fd == -1 || ctx == NULL)
+        return -1;
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.kind = MAAP_CMD_RESERVE;
+    cmd.count = ctx->count;
+
+    if (send_maap_cmd(&cmd) < 0) {
+        avb_log(L_AVDECC, LOG_WARNING, "MAAP: failed to send RESERVE command");
+        return -1;
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec  +=  MAAP_ACQUIRE_TIMEOUT_MS / 1000;
+    deadline.tv_nsec += (MAAP_ACQUIRE_TIMEOUT_MS % 1000) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
+
+    for (;;) {
+        int remaining = ms_until(&deadline);
+        int wrc;
+
+        if (remaining <= 0) {
+            avb_log(L_AVDECC, LOG_WARNING, "MAAP: timeout waiting for ACQUIRED");
+            return -1;
+        }
+
+        wrc = wait_for_notify(&response, remaining);
+        if (wrc < 0)
+            return -1;
+        if (wrc == 0) {
+            avb_log(L_AVDECC, LOG_WARNING, "MAAP: timeout waiting for ACQUIRED");
+            return -1;
+        }
+
+        if (response.kind == MAAP_NOTIFY_ACQUIRING)
+            continue;
+        if (response.kind != MAAP_NOTIFY_ACQUIRED)
+            continue;
+
+        if (response.result == MAAP_NOTIFY_ERROR_RESERVE_NOT_AVAILABLE) {
+            avb_log(L_AVDECC, LOG_WARNING, "MAAP: reservation not available");
+            return -1;
+        }
+        if (response.result != MAAP_NOTIFY_ERROR_NONE) {
+            avb_log(L_AVDECC, LOG_WARNING, "MAAP: reserve failed with error %d", response.result);
+            return -1;
+        }
+
+        ctx->base  = response.start;
+        ctx->count = response.count;
+        ctx->id    = response.id;
+        avb_log(L_AVDECC, LOG_INFO, "MAAP: acquired 0x%012llx (n=%u, id=%d)",
+                (unsigned long long)ctx->base, ctx->count, ctx->id);
+        return 0;
+    }
 }
 
 int maap_release_adresses(struct maap_record* ctx)
 {
-}
+    Maap_Cmd cmd;
+    Maap_Notify response;
+    struct pollfd pfd;
+    int rc;
 
+    if (sock_fd == -1 || ctx == NULL)
+        return -1;
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.kind = MAAP_CMD_RELEASE;
+    cmd.id = ctx->id;
+
+    rc = send_maap_cmd(&cmd);
+    if (rc < 0) {
+        avb_log(L_AVDECC, LOG_WARNING, "MAAP: failed to send RELEASE command");
+        return -1;
+    }
+
+    pfd.fd = sock_fd;
+    pfd.events = POLLIN;
+    rc = poll(&pfd, 1, 2000);
+    if (rc < 0) {
+        avb_log(L_AVDECC, LOG_WARNING, "MAAP: poll failed: %s", strerror(errno));
+        return -1;
+    }
+    if (rc == 0) {
+        avb_log(L_AVDECC, LOG_WARNING, "MAAP: timeout waiting for RELEASED notification");
+        return -1;
+    }
+
+    rc = receive_maap_response(&response);
+    if (rc < 0) {
+        avb_log(L_AVDECC, LOG_WARNING, "MAAP: failed to receive response");
+        return -1;
+    }
+
+    if (response.kind != MAAP_NOTIFY_RELEASED) {
+        avb_log(L_AVDECC, LOG_WARNING, "MAAP: expected RELEASED, got %d", response.kind);
+        return -1;
+    }
+
+    if (response.result != MAAP_NOTIFY_ERROR_NONE) {
+        avb_log(L_AVDECC, LOG_WARNING, "MAAP: release failed with error %d", response.result);
+        return -1;
+    }
+
+    return 0;
+}

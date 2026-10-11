@@ -1,0 +1,5 @@
+# N=4, 32ch, 24Ai only, 1:1 -- the 24Ai on its own, without the N=31 network
+# load, for device_check.sh (the 24Ai copy-64 events were only ever
+# seen at N=24 / N=31).  AVB_DEVICE_SOURCE_MAC = the 24Ai.
+# our-streams  host   device-streams
+0-3            24ai   0-3

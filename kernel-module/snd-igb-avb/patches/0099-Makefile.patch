@@ -1,0 +1,163 @@
+diff -ruN a/Makefile b/Makefile
+--- a/Makefile	2026-06-04 22:35:35.924868907 +0200
++++ b/Makefile	2026-06-04 22:35:35.926305380 +0200
+@@ -22,6 +22,8 @@
+ #
+ ################################################################################
+ 
++KBUILD_FLAGS += -fno-pie
++
+ ###########################################################################
+ # Driver files
+ FAMILYC = e1000_82575.c e1000_i210.c
+@@ -30,16 +32,16 @@
+ # core driver files
+ CFILES = igb_main.c $(FAMILYC) e1000_mac.c e1000_nvm.c e1000_phy.c \
+ 	 e1000_manage.c igb_param.c igb_ethtool.c kcompat.c e1000_api.c \
+-	 e1000_mbx.c igb_vmdq.c igb_procfs.c igb_hwmon.c igb_debugfs.c
++	 e1000_mbx.c igb_vmdq.c igb_procfs.c igb_hwmon.c igb_debugfs.c alsa.c avpdu.c avb-bench.c
+ HFILES = igb.h e1000_hw.h e1000_osdep.h e1000_defines.h e1000_mac.h \
+ 	 e1000_nvm.h e1000_manage.h $(FAMILYH) kcompat.h e1000_regs.h \
+-	 e1000_api.h igb_regtest.h e1000_mbx.h igb_vmdq.h
++	 e1000_api.h igb_regtest.h e1000_mbx.h igb_vmdq.h alsa.h avpdu.h avb-bench.h
+ ifeq (,$(BUILD_KERNEL))
+ BUILD_KERNEL=$(shell uname -r)
+ endif
+ 
+ # PTP is required for AVB support
+-CFLAGS_EXTRA += -DIGB_PTP
++CFLAGS_EXTRA += -DIGB_PTP -fno-pie
+ 
+ # Add 32 bit ioctl support
+ ifeq ($(32BIT_IOCTL_SUPPORT),y)
+@@ -64,7 +66,8 @@
+ 
+ # Kernel Search Path
+ # All the places we look for kernel source
+-KSP :=  /lib/modules/$(BUILD_KERNEL)/build \
++KSP :=  /usr/src/linux-headers-$(BUILD_KERNEL) \
++        /lib/modules/$(BUILD_KERNEL)/build \
+         /lib/modules/$(BUILD_KERNEL)/source \
+         /usr/src/linux-$(BUILD_KERNEL) \
+         /usr/src/linux-$($(BUILD_KERNEL) | sed 's/-.*//') \
+@@ -74,8 +77,8 @@
+         /usr/src/linux
+ 
+ # prune the list down to only values that exist
+-# and have an include/linux sub-directory
+-test_dir = $(shell [ -e $(dir)/include/linux ] && echo $(dir))
++# and have an include sub-directory
++test_dir = $(shell test -e $(dir)/include && echo $(dir))
+ KSP := $(foreach dir, $(KSP), $(test_dir))
+ 
+ # we will use this first valid entry in the search path
+@@ -108,7 +111,7 @@
+         /boot/vmlinuz.autoconf.h
+ 
+ # prune the lists down to only files that exist
+-test_file = $(shell [ -f $(file) ] && echo $(file))
++test_file = $(shell test -f $(file) && echo $(file))
+ VSP := $(foreach file, $(VSP), $(test_file))
+ CSP := $(foreach file, $(CSP), $(test_file))
+ 
+@@ -169,15 +172,10 @@
+ # standard flags for module builds
+ EXTRA_CFLAGS += -DLINUX -D__KERNEL__ -DMODULE -O2 -pipe -Wall
+ EXTRA_CFLAGS += -I$(KSRC)/include
+-EXTRA_CFLAGS += $(shell [ -f $(KSRC)/include/linux/modversions.h ] && \
++EXTRA_CFLAGS += $(shell test -f $(KSRC)/include/linux/modversions.h && \
+             echo "-DMODVERSIONS -DEXPORT_SYMTAB \
+                   -include $(KSRC)/include/linux/modversions.h")
+ 
+-EXTRA_CFLAGS += -fno-PIC
+-
+-# security enhancing flags
+-EXTRA_CFLAGS += -fstack-protector-strong -fno-strict-overflow -fno-delete-null-pointer-checks -fwrapv
+-
+ EXTRA_CFLAGS += $(CFLAGS_EXTRA)
+ 
+ RHC := $(KSRC)/include/linux/rhconfig.h
+@@ -203,7 +201,7 @@
+ 	grep -m 1 LINUX_VERSION_CODE | awk '{ print $$3 }' | sed 's/\"//g')
+ 
+ # abort the build on kernels older than 2.4.21
+-ifneq (1,$(shell [ $(KVER_CODE) -ge 132117 ] && echo 1 || echo 0))
++ifneq (1,$(shell test $(KVER_CODE) -ge 132117 && echo 1 || echo 0))
+   $(error *** Aborting the build. \
+           *** This driver '$(KVER_CODE)' is not supported on kernel versions older than 2.4.21, \
+               because this driver requires NAPI support.)
+@@ -248,7 +246,7 @@
+ ###########################################################################
+ # Kernel Version Specific rules
+ 
+-ifeq (1,$(shell [ $(KVER_CODE) -ge 132352 ] && echo 1 || echo 0))
++ifeq (1,$(shell test $(KVER_CODE) -ge 132352 && echo 1 || echo 0))
+ 
+ # Makefile for 2.5.x and newer kernel
+ TARGET = $(DRIVER_NAME).ko
+@@ -264,13 +262,13 @@
+ else
+ default:
+ ifeq ($(KOBJ),$(KSRC))
+-	$(MAKE) -C $(KSRC) M=$(shell pwd) modules
++	$(MAKE) -C $(KSRC) SUBDIRS=$(shell pwd) modules
+ else
+-	$(MAKE) -C $(KSRC) O=$(KOBJ) M=$(shell pwd) modules
++	$(MAKE) -C $(KSRC) O=$(KOBJ) SUBDIRS=$(shell pwd) modules
+ endif
+ endif
+ 
+-else # ifeq (1,$(shell [ $(KVER_CODE) -ge 132352 ] && echo 1 || echo 0))
++else # ifeq (1,$(shell test $(KVER_CODE) -ge 132352 && echo 1 || echo 0))
+ 
+ # Makefile for 2.4.x kernel
+ TARGET = $(DRIVER_NAME).o
+@@ -297,7 +295,7 @@
+ 	echo "**************************************************"
+ 	echo "** $(TARGET) built for $(KVER)"
+ 	echo -n "** SMP               "
+-	if [ "$(SMP)" = "1" ]; \
++	if test "$(SMP)" = "1" ; \
+ 		then echo "Enabled"; else echo "Disabled"; fi
+ 	echo "**************************************************"
+ 	echo
+@@ -306,7 +304,7 @@
+ default:
+ 	$(MAKE)
+ 
+-endif # ifeq (1,$(shell [ $(KVER_CODE) -ge 132352 ] && echo 1 || echo 0))
++endif # ifeq (1,$(shell test $(KVER_CODE) -ge 132352 && echo 1 || echo 0))
+ 
+ ifeq (,$(MANDIR))
+   # find the best place to install the man page
+@@ -316,7 +314,7 @@
+     test_dir = $(findstring $(dir), $(MANPATH))
+   else
+     # no MANPATH, test based on directory existence
+-    test_dir = $(shell [ -e $(dir) ] && echo $(dir))
++    test_dir = $(shell test -e $(dir) && echo $(dir))
+   endif
+   # our preferred install path
+   # should /usr/local/man be in here ?
+@@ -350,18 +348,18 @@
+   ifeq ($(DEPVER),1 )
+ 	/sbin/depmod -r $(INSTALL_MOD_PATH) -a || true
+   else
+-	/sbin/depmod -b $(INSTALL_MOD_PATH) -a $(KVER) || true
++	/sbin/depmod -b $(INSTALL_MOD_PATH) -a -n $(KVERSION) > /dev/null || true
+   endif
+ endif
+ 	install -D -m 644 $(MANFILE).gz $(INSTALL_MOD_PATH)$(MANDIR)/man$(MANSECTION)/$(MANFILE).gz
+ 	man -c -P'cat > /dev/null' $(MANFILE:.$(MANSECTION)=) || true
+ 
+ uninstall:
+-	if [ -e $(INSTDIR)/$(TARGET) ] ; then \
++	if test -e $(INSTDIR)/$(TARGET) ; then \
+ 	    $(RM) $(INSTDIR)/$(TARGET) ; \
+ 	fi
+ 	/sbin/depmod -a
+-	if [ -e $(MANDIR)/man$(MANSECTION)/$(MANFILE).gz ] ; then \
++	if test -e $(MANDIR)/man$(MANSECTION)/$(MANFILE).gz ; then \
+ 		$(RM) $(MANDIR)/man$(MANSECTION)/$(MANFILE).gz ; \
+ 	fi
+ 

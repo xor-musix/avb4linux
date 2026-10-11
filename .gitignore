@@ -1,12 +1,50 @@
-jdksavdecc-c/
-daemons/
-tools/
+# ---- Build results (compiled artifacts) ----
+
+# Object files, libraries, archives
 *.o
-*.o.d
-*.cmd
 *.a
+*.so
+*.lo
+*.la
+
+# Kernel module build output
 *.ko
 *.mod
-*.symvers
-*.order
 *.mod.c
+*.mod.o
+*.o.d
+*.cmd
+.*.cmd
+Module.symvers
+modules.order
+modules.builtin
+built-in.a
+.module-common.o
+.tmp_versions/
+.cache.mk
+
+# Tool binaries (no extension, so listed explicitly)
+tools/avb-user
+
+# Generated build directories
+# Staged kernel-module tree (pristine submodule + patches + src, assembled at build time)
+kernel-module/snd-igb-avb/build/
+# Staged gptp tree (pristine submodule + gptp-patches, assembled at build time)
+daemons/gptp-build/
+
+# Daemon binaries are built inside the OpenAvnu/gptp submodules and are not
+# tracked by this repo (submodule working trees are ignored by the parent).
+
+# Recorded test captures
+*.wav
+
+# Python bytecode
+__pycache__/
+
+# ---- IDE / local config (not build output, but local noise) ----
+.idea/
+.vscode/
+
+# ---- individual environment variables, secrets etc. ----
+.env
+*.bak

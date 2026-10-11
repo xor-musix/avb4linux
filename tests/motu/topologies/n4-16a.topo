@@ -1,0 +1,3 @@
+# N=4, 32ch, 16A only, 1:1 (regression)
+# our-streams  host   device-streams
+0-3            16a    0-3

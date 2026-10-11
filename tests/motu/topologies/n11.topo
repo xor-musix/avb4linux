@@ -1,0 +1,5 @@
+# N=11, 88ch: three talker filters in SW demux, under the proven 128k pps
+# our-streams  host   device-streams
+0-3            16a    0-3
+4-7            828es  0-3
+8-10           ulavb  0-2

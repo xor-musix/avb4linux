@@ -1,0 +1,6 @@
+# built oracle binary
+audio_check
+# machine-specific amplitude baseline (regenerate with --establish-baseline)
+audio_baseline.txt
+# built 256-channel oracle binary
+scale-32-talkers/audio_check_256ch

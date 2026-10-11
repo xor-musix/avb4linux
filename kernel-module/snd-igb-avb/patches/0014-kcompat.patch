@@ -1,0 +1,207 @@
+--- a/kcompat.h	2026-10-10 00:38:44.256344878 +0200
++++ b/kcompat.h	2026-10-10 00:42:13.894813259 +0200
+@@ -53,6 +53,7 @@
+ #include <asm/io.h>
+ #include <linux/ethtool.h>
+ #include <linux/if_vlan.h>
++#include <linux/cpumask.h>
+ 
+ /* UTS_RELEASE is in a different header starting in kernel 2.6.18 */
+ #ifndef UTS_RELEASE
+@@ -269,7 +270,7 @@
+ #define node_online(node) ((node) == 0)
+ #endif
+ 
+-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(5,4,0) )
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5,6,2)
+ #ifndef num_online_cpus
+ #define num_online_cpus() smp_num_cpus
+ #endif
+@@ -752,13 +753,6 @@
+ #define UTS_UBUNTU_RELEASE_ABI 0
+ #define UBUNTU_VERSION_CODE 0
+ #else
+-
+-#if UTS_UBUNTU_RELEASE_ABI > 255
+-/* UTS_UBUNTU_RELEASE_ABI is too large... */
+-#undef UTS_UBUNTU_RELEASE_ABI
+-#define UTS_UBUNTU_RELEASE_ABI 255
+-#endif /* UTS_UBUNTU_RELEASE_ABI > 255 */
+-
+ /* Ubuntu does not provide actual release version macro, so we use the kernel
+  * version plus the ABI to generate a unique version code specific to Ubuntu.
+  * In addition, we mask the lower 8 bits of LINUX_VERSION_CODE in order to
+@@ -768,6 +762,10 @@
+  */
+ #define UBUNTU_VERSION_CODE (((LINUX_VERSION_CODE & ~0xFF) << 8) + (UTS_UBUNTU_RELEASE_ABI))
+ 
++#if UTS_UBUNTU_RELEASE_ABI > 255
++#error UTS_UBUNTU_RELEASE_ABI is too large...
++#endif /* UTS_UBUNTU_RELEASE_ABI > 255 */
++
+ #if ( LINUX_VERSION_CODE <= KERNEL_VERSION(3,0,0) )
+ /* Our version code scheme does not make sense for non 3.x or newer kernels,
+  * and we have no support in kcompat for this scenario. Thus, treat this as a
+@@ -1977,6 +1975,10 @@
+ #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+ #endif
+ 
++#ifndef FIELD_SIZEOF
++#define FIELD_SIZEOF(t, f) (sizeof(((t*)0)->f))
++#endif
++
+ #ifndef skb_is_gso
+ #ifdef NETIF_F_TSO
+ #define skb_is_gso _kc_skb_is_gso
+@@ -2577,9 +2579,6 @@
+ #define pci_disable_link_state(p, s) _kc_pci_disable_link_state(p, s)
+ #else /* < 2.6.26 */
+ #define NETDEV_CAN_SET_GSO_MAX_SIZE
+-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(5,4,0) )
+-#include <linux/pci-aspm.h>
+-#endif /* < 5.4.0 */
+ #define HAVE_NETDEV_VLAN_FEATURES
+ #ifndef PCI_EXP_LNKCAP_ASPMS
+ #define PCI_EXP_LNKCAP_ASPMS 0x00000c00 /* ASPM Support */
+@@ -4638,6 +4637,11 @@
+ #define NDO_DFLT_BRIDGE_GETLINK_HAS_BRFLAGS
+ #endif /* 3.19.0 */
+ 
++#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,13,0) )
++#else
++#define HAVE_NDO_FDB_ADD_BYPASS
++#endif
++
+ #if ( LINUX_VERSION_CODE < KERNEL_VERSION(3,20,0) )
+ /* vlan_tx_xx functions got renamed to skb_vlan */
+ #ifndef skb_vlan_tag_get
+@@ -4707,119 +4711,20 @@
+ #define HAVE_GENEVE_RX_OFFLOAD
+ #endif /* 4.5.0 */
+ 
+-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4,16,0))
+-#ifndef sizeof_field
+-#define sizeof_field(t, f) (sizeof(((t*)0)->f))
+-#endif
+-#endif /* 4.16.0 */
+-
+-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4,19,0))
+-#else
+-#define HAVE_NDO_SELECT_QUEUE_SB_DEV
+-#endif /* 4.19.0 */
+-
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,20,0))
+-#define IGB_SETTINGS_NEWETHOPS
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
++#define HAVE_ETH_HW_ADDR_SET
+ #endif
+ 
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0))
+-#define HAVE_NETLINK_EXT_ACK
+-#endif /* 5.0.0 */
+-
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5,1,0))
+-#define HAVE_NDO_FDB_ADD_EXT_ACK
+-#endif /* 5.1.0 */
+-
+-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5,2,0))
+-#define HAVE_NDO_SELECT_FALLBACK
+-#endif /* 5.2.0 */
+-
+-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5,4,0))
+-typedef struct skb_frag_struct skb_frag_t;
+-
+-static inline void skb_frag_off_add(skb_frag_t *frag, int delta)
+-{
+-	frag->page_offset += delta;
+-}
+-#endif /* 5.4.0 */
+-
+-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5,7,0))
+-#define pci_aer_clear_nonfatal_status(x) pci_cleanup_aer_uncorrect_error_status(x)
+-#endif /* 5.7.0 */
+-
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5,7,0))
+-#define HAVE_ETHTOOL_COALESCE_PARAMS
+-#endif /* 5.7.0 */
+-
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5,15,0))
+-#define HAVE_ETHTOOL_COALESCE_EXT
+-#define HAVE_NDO_ETH_IOCTL
+-#endif /* 5.15.0 */
+-
+-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0))
+-#define eth_random_addr(addr) random_ether_addr(addr)
+-#endif /* 3.6.0 */
+-
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5,17,0))
+-#define HAVE_ETHTOOL_RINGPARAM_EXT
+-#endif /* 5.17.0 */
+-
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6,1,0))
+-#define HAVE_NETIF_NAPI_ADD_WEIGHT_REMOVED
+-#endif /* 6.1.0 */
+-
+-#ifndef __has_attribute
+-#define __GCC4_has_attribute___fallthrough__ 0
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0))
++#define HAVE_NDO_FDB_ADD_EXTACK_BOOL
+ #endif
+ 
+-#if __has_attribute(__fallthrough__)
+-#define fallthrough __attribute__((__fallthrough__))
+-#else
+-#define fallthrough do {} while (0)  /* fallthrough */
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
++#define HAVE_CYCLECOUNTER_READ_NONCONST
+ #endif
+ 
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5,15,0))
+-#define HAS_ETH_HW_ADDR_SET
+-#endif /* 5.15.0 */
+-
+-#if (LINUX_VERSION_CODE < KERNEL_VERSION(6,2,0))
+-#define HAVE_PTP_ADJFREQ
+-#endif /* 6.2.0 */
+-
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6,6,0))
+-#define pci_enable_pcie_error_reporting(pdev)
+-#define pci_disable_pcie_error_reporting(pdev)
+-#endif /* 6.6.0 */
+-
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6,8,0))
+-#define HAVE_RXFH_PARAM
+-#endif /* 6.8.0 */
+-
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6,9,0))
+-#define HAVE_ETHTOOL_LINKMODE_HELPERS
+-#endif /* 6.9.0 */
+-
+-#if (LINUX_VERSION_CODE < KERNEL_VERSION(6,11,0))
+-#ifndef kernel_ethtool_ts_info
+-#define kernel_ethtool_ts_info ethtool_ts_info
++#if ( LINUX_VERSION_CODE >= KERNEL_VERSION(4,11,0) )
++#include <linux/sched/signal.h>
+ #endif
+-#endif /* 6.11.0 */
+-
+-#if (LINUX_VERSION_CODE < KERNEL_VERSION(6,12,0))
+-#define HAVE_FS_NO_LLSEEK
+-#endif /* 6.12.0 */
+-
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6,13,0))
+-#define HAVE_NDO_FDB_ADD_NOTIFIED
+-#endif /* 6.13.0 */
+-
+-#if (LINUX_VERSION_CODE < KERNEL_VERSION(6,15,0))
+-#define timer_delete_sync(timer) del_timer_sync(timer)
+-#endif /* 6.15.0 */
+-
+-#if LINUX_VERSION_CODE < KERNEL_VERSION(6,17,0)
+-#define HAVE_CYCLECOUNTER_PARAM_CONST
+-#endif /* 6.17.0 */
+-
+ 
+-#endif /* _KCOMPAT_H_ */
++#endif /* _KCOMPAT_H_ */
+\ No newline at end of file

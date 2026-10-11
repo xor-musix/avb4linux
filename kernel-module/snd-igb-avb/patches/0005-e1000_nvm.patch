@@ -1,0 +1,13 @@
+diff -ruN a/e1000_nvm.c b/e1000_nvm.c
+--- a/e1000_nvm.c	2026-06-04 22:35:35.942120488 +0200
++++ b/e1000_nvm.c	2026-06-04 22:35:35.944084239 +0200
+@@ -904,7 +904,7 @@
+ 			e1000_read_invm_version(hw, fw_vers);
+ 			return;
+ 		}
+-		fallthrough;
++		/* fall through */
+ 	case e1000_i350:
+ 		hw->nvm.ops.read(hw, NVM_ETRACK_HIWORD, 1, &etrack_test);
+ 		/* find combo image version */
+

@@ -1,6 +1,7 @@
 /******************************************************************************
 
   Copyright (c) 2019, Ralf Beck
+  Copyright (c) 2026, mnemonic powerplay <mnemonic@xor-musix.de>
   All rights reserved.
 
   Redistribution and use in source and binary forms, with or without
@@ -35,6 +36,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <fcntl.h>
 
 #include <stdio.h>
@@ -45,27 +47,48 @@
 #include <stdlib.h>
 
 #include <poll.h>
+#include <time.h>
+#include <signal.h>
+
+#include <linux/sockios.h>
 
 #include <endian.h>
 
 #include "mrp_client.h"
 #include "maap_client.h"
 #include "avpdu.h"
+#include "avb_log.h"
+#include "avb_status.h"
+#include "gptp_client.h"
+#include "gptp_link.h"
+#include "utils.h"
+#include "../include/stream_id.h"
+#include "stream_identity.h"
+#include "avtp.h"
+#include "msrp_talker.h"
+#include "msrp_listener.h"
+#include "msrp_domain.h"
+#include "avdecc_adp.h"
+#include "avdecc_aecp.h"
+#include "avdecc_acmp.h"
+#include "avdecc_peers.h"
+#include "avdecc_probe.h"
+#include "descriptor.h"
 
 #include <jdksavdecc.h>
-#include <../kernel-module/igb/avb-config.h>
+#include <../kernel-module/snd-igb-avb/src/avb-config.h>
 
-#define CLASS_A_ID 6
-#define CLASS_A_VLAN 2
-#define CLASS_A_PRIORITY 3
-
-char DMAC[] = { 0x91, 0xe0, 0xf0, 0x01, 0x00, 0x00 };  // for ADP and AECP
+char DMAC[] = { 0x91, 0xe0, 0xf0, 0x01, 0x00, 0x00 };
 
 #define MCAST_BASE MAAP_LOCALLY_ADMINISTRATORED_BASE
 
-uint64_t avb_device_talker_mac_base;
-uint64_t avb_device_source_mac;
-uint64_t own_mac;
+uint64_t g_device_source_mac = 0;
+uint64_t g_device_talker_mac = 0;
+
+static struct maap_record g_maap_ctx = { .base = 0, .count = 0 };
+
+int g_num_streams = 1;
+struct avb_stream_id_cfg g_streams[MAX_STREAMS];
 
 uint32_t samplerate = 48000;
 
@@ -74,1611 +97,676 @@ uint64_t CONTROLLER_ID;
 uint64_t MODEL_ID;
 uint64_t GRANDMASTER_ID;
 
-uint64_t REMOTE_ENTITY_ID;
-uint64_t REMOTE_TALKER_ID;
-uint64_t REMOTE_LISTENER_ID;
-
-uint64_t own_mac_address; 
+uint64_t own_mac_address;
 char MAC[6];
 
 struct jdksavdecc_eui64 entity_guid;
-struct jdksavdecc_eui64 model_id;
-struct jdksavdecc_eui64 controller_guid;
-struct jdksavdecc_eui64 grandmaster_id;
 
-struct jdksavdecc_eui64 f_stream;
-
-struct jdksavdecc_eui64 remote_talker_guid;
-struct jdksavdecc_eui64 remote_listener_guid;
-
-struct jdksavdecc_eui48 f_mac;
-
-// NIC index
 int ifindex = 0;
 
-#define L2_PACKET_IPG (125000) /* (1) packet every 125 usec */
-#define PKT_SZ (100)
-
-// offset of control header in ethernet frame
-
-#define HEADER_OFFSET 14
-#define MACLEN 6
-
-#define NUM_STREAMS 16
-
-#define STREAM_PORT_INPUT_BASE_CLUSTER 0
-#define STREAM_PORT_INPUT_BASE_MAP 0
-
-#define STREAM_PORT_OUTPUT_BASE_CLUSTER (STREAM_PORT_INPUT_BASE_CLUSTER+(NUM_STREAMS*8))
-#define STREAM_PORT_OUTPUT_BASE_MAP (STREAM_PORT_INPUT_BASE_MAP+NUM_STREAMS)
-
-/* some conversion helpers */
-
-uint64_t array6_to_uint64(char *val)
-{
-    uint64_t ret = 0;
-    uint8_t x = 0;
-    uint64_t tmp = 0;
-
-    for (unsigned i=0; i<6; i++)
-    {
-        x = (uint8_t)val[i];
-        tmp = (uint64_t)x;
-
-        ret = ret + (tmp << (8*(5-i)));
-    }
-    return ret;
-}
-
-void uint64_to_array6(uint64_t src, uint8_t *dest)
-{
-    memset(dest, 0, 6);
-
-    dest[0] = (src >> (8*5)) & 0xff;
-    dest[1] = (src >> (8*4)) & 0xff;
-    dest[2] = (src >> (8*3)) & 0xff;
-    dest[3] = (src >> (8*2)) & 0xff;
-    dest[4] = (src >> (8*1)) & 0xff;
-    dest[5] = (src >> (8*0)) & 0xff;
-}
-
-void uint64_to_array8(uint64_t src, uint8_t *dest)
-{
-    memset(dest, 0, 8);
-
-    dest[0] = (src >> (8*7)) & 0xff;
-    dest[1] = (src >> (8*6)) & 0xff;
-    dest[2] = (src >> (8*5)) & 0xff;
-    dest[3] = (src >> (8*4)) & 0xff;
-    dest[4] = (src >> (8*3)) & 0xff;
-    dest[5] = (src >> (8*2)) & 0xff;
-    dest[6] = (src >> (8*1)) & 0xff;
-    dest[7] = (src >> (8*0)) & 0xff;
-}
-
-uint64_t mac_to_entity_id(uint64_t mac)
-{
-    return ((mac & 0xffffff000000) << 16) | (0xfffe000000) | (mac & 0xffffff);
-}
-
-uint64_t mac_to_controller_id(uint64_t mac)
-{
-    return ((mac & 0xffffff000000) << 16) | (0xfefe000000) | (mac & 0xffffff);
-}
-
-uint64_t mac_to_grandmaster_id(uint64_t mac)
-{
-    return ((mac & 0xffffff000000) << 16) | (0xfffe000000) | (mac & 0xffffff);
-}
-
-uint64_t mac_to_stream_id(uint64_t mac, uint64_t guid)
-{
-    return (mac << 16) | guid;
-}
-
-// our descriptors
-
-// entity descriptor
-
-struct jdksavdecc_descriptor_entity entity;
-
-void my_talker_cb(const struct mrp_talker_ctx ctx) 
-{
-int i;
-
-printf("talker:\n");
-printf("mode %s\n", ctx.mode ? "LEAVE" : "JOIN");
-printf("stream: ");
-for (i=0;i<8;i++) printf("%02x", (unsigned char)ctx.stream_id[i]);
-printf("\n");
-printf("dst_mac: ");
-for (i=0;i<6;i++) printf("%02x", (unsigned char)ctx.dst_mac[i]);
-printf("\n");
-printf("vid: %d\n", ctx.vid);
-}
-
-void my_listener_cb(const struct mrp_listener_ctx ctx)
-{
-int i;
-
-printf("listener:\n");
-printf("mode %s\n", ctx.mode ? "LEAVE" : "JOIN");
-printf("stream: ");
-for (i=0;i<8;i++) printf("%02x", (unsigned char)ctx.stream_id[i]);
-printf("\n");
-printf("listener: ");
-for (i=0;i<6;i++) printf("%02x", (unsigned char)ctx.listener[i]);
-printf("\n");
-}
-
-void my_domain_cb(const struct mrp_domain_ctx ctx)
-{
-printf("domain:\n");
-printf("mode %d\n", ctx.mode);
-printf("id %d\n", ctx.id);
-printf("prio %d\n", ctx.priority);
-printf("vid %d\n", ctx.vid);
-}
-
-
-void fill_jdksavdecc_descriptor_entity()
-{
-   memset(&entity, 0, sizeof(entity));
-
-   entity.descriptor_type = JDKSAVDECC_DESCRIPTOR_ENTITY;
-   entity.descriptor_index = 0;
-   jdksavdecc_eui64_init_from_uint64(&entity.entity_id, ENTITY_ID);
-   jdksavdecc_eui64_init_from_uint64(&entity.entity_model_id, MODEL_ID);
-
-   entity.entity_capabilities = 
-      JDKSAVDECC_ADP_ENTITY_CAPABILITY_AEM_SUPPORTED |
-      JDKSAVDECC_ADP_ENTITY_CAPABILITY_CLASS_A_SUPPORTED |
-      JDKSAVDECC_ADP_ENTITY_CAPABILITY_GPTP_SUPPORTED |
-      JDKSAVDECC_ADP_ENTITY_CAPABILITY_AEM_IDENTIFY_CONTROL_INDEX_VALID |
-      JDKSAVDECC_ADP_ENTITY_CAPABILITY_AEM_INTERFACE_INDEX_VALID;
-   entity.talker_stream_sources = 16;
-   entity.talker_capabilities = 
-      JDKSAVDECC_ADP_TALKER_CAPABILITY_IMPLEMENTED |
-      JDKSAVDECC_ADP_TALKER_CAPABILITY_AUDIO_SOURCE;
-   entity.listener_stream_sinks = 16;
-   entity.listener_capabilities =
-      JDKSAVDECC_ADP_LISTENER_CAPABILITY_IMPLEMENTED |
-      JDKSAVDECC_ADP_LISTENER_CAPABILITY_AUDIO_SINK;
-   entity.controller_capabilities = 0;
-   entity.available_index = 0;
-   jdksavdecc_eui64_init_from_uint64(&entity.association_id, 0);
-   jdksavdecc_string_set_from_cstr(&entity.entity_name, "AVB");
-   entity.vendor_name_string = 0;
-   entity.model_name_string = 1;
-   jdksavdecc_string_set_from_cstr(&entity.firmware_version, "1.0.0");
-   jdksavdecc_string_set_from_cstr(&entity.group_name, "");
-   jdksavdecc_string_set_from_cstr(&entity.serial_number, "1");
-   entity.configurations_count = 1;
-   entity.current_configuration = 0;
-}
-
-
-// configuration descriptor
-
-struct jdksavdecc_descriptor_configuration configuration;
-uint16_t configuration_descriptors[16];
-
-void fill_jdksavdecc_descriptor_configuration()
-{
-   memset(&configuration, 0, sizeof(configuration));
-
-   configuration.descriptor_type = JDKSAVDECC_DESCRIPTOR_CONFIGURATION;
-   configuration.descriptor_index = 0;
-   jdksavdecc_string_set_from_cstr(&configuration.object_name, "");
-   configuration.localized_description = 0xffff;
-   configuration.descriptor_counts_count = 8;
-   configuration.descriptor_counts_offset  = 74;
-
-   configuration_descriptors[0] = htons(JDKSAVDECC_DESCRIPTOR_AUDIO_UNIT);
-   configuration_descriptors[1] = htons(1);
-   configuration_descriptors[2] = htons(JDKSAVDECC_DESCRIPTOR_STREAM_INPUT);
-   configuration_descriptors[3] = htons(16);  
-   configuration_descriptors[4] = htons(JDKSAVDECC_DESCRIPTOR_STREAM_OUTPUT);
-   configuration_descriptors[5] = htons(16);
-   configuration_descriptors[6] = htons(JDKSAVDECC_DESCRIPTOR_AVB_INTERFACE);
-   configuration_descriptors[7] = htons(1);
-   configuration_descriptors[8] = htons(JDKSAVDECC_DESCRIPTOR_CLOCK_SOURCE);
-   configuration_descriptors[9] = htons(1);
-   configuration_descriptors[10] = htons(JDKSAVDECC_DESCRIPTOR_LOCALE);
-   configuration_descriptors[11] = htons(1);
-   configuration_descriptors[12] = htons(JDKSAVDECC_DESCRIPTOR_STRINGS);
-   configuration_descriptors[13] = htons(1);
-   configuration_descriptors[14] = htons(JDKSAVDECC_DESCRIPTOR_CLOCK_DOMAIN);
-   configuration_descriptors[15] = htons(1);
-}
-
-// audio unit descriptor
-
-struct jdksavdecc_descriptor_audio_unit audio_unit;
-
-uint32_t samplerates[6];
-
-void fill_jdksavdecc_descriptor_audio_unit()
-{
-   audio_unit.descriptor_type = JDKSAVDECC_DESCRIPTOR_AUDIO_UNIT;
-   audio_unit.descriptor_index = 0;
-   jdksavdecc_string_set_from_cstr(&audio_unit.object_name, "");
-   audio_unit.localized_description = 1;
-   audio_unit.clock_domain_index = 0;
-   audio_unit.number_of_stream_input_ports = 16;
-   audio_unit.base_stream_input_port = 0;
-   audio_unit.number_of_stream_output_ports = 16;
-   audio_unit.base_stream_output_port = 0;
-   audio_unit.number_of_external_input_ports = 0;
-   audio_unit.base_external_input_port = 0;
-   audio_unit.number_of_external_output_ports = 0;
-   audio_unit.base_external_output_port = 0;
-   audio_unit.number_of_internal_input_ports = 0;
-   audio_unit.base_internal_input_port = 0;
-   audio_unit.number_of_internal_output_ports = 0;
-   audio_unit.base_internal_output_port = 0;
-   audio_unit.number_of_controls = 0;
-   audio_unit.base_control = 0;
-   audio_unit.number_of_signal_selectors = 0;
-   audio_unit.base_signal_selector = 0;
-   audio_unit.number_of_mixers = 0;
-   audio_unit.base_mixer = 0;
-   audio_unit.number_of_matrices = 0;
-   audio_unit.base_matrix = 0;
-   audio_unit.number_of_splitters = 0;
-   audio_unit.base_splitter = 0;
-   audio_unit.number_of_combiners = 0;
-   audio_unit.base_combiner = 0;
-   audio_unit.number_of_demultiplexers = 0;
-   audio_unit.base_demultiplexer = 0;
-   audio_unit.number_of_multiplexers = 0;
-   audio_unit.base_multiplexer = 0;
-   audio_unit.number_of_transcoders = 0;
-   audio_unit.base_transcoder = 0;
-   audio_unit.number_of_control_blocks = 0;
-   audio_unit.base_control_block = 0;
-   audio_unit.current_sampling_rate = samplerate;
-   audio_unit.sampling_rates_offset = 144;
-   audio_unit.sampling_rates_count = 6;
-
-   samplerates[0] = htonl(44100);
-   samplerates[1] = htonl(48000);
-   samplerates[2] = htonl(88200);
-   samplerates[3] = htonl(96000);
-   samplerates[4] = htonl(176400);
-   samplerates[5] = htonl(192000);
-};
-
-struct jdksavdecc_descriptor_stream stream_input[16];
-struct jdksavdecc_descriptor_stream stream_output[16];
-
-uint64_t STREAM_INPUT_FORMAT_0 = 0x000800600801A000;
-uint64_t STREAM_INPUT_FORMAT_1 = 0x000800600802A000;
-uint64_t STREAM_INPUT_FORMAT_2 = 0x000800600803A000;
-uint64_t STREAM_INPUT_FORMAT_3 = 0x000800600804A000;
-uint64_t STREAM_INPUT_FORMAT_4 = 0x000800600805A000;
-uint64_t STREAM_INPUT_FORMAT_5 = 0x000800600806A000;
-
-uint64_t STREAM_INPUT_FORMAT_1_REVERSE =  0x00A0020840000800;
-
-uint64_t STREAM_OUTPUT_FORMAT_0 = 0x000800600801A000;
-uint64_t STREAM_OUTPUT_FORMAT_1 = 0x000800600802A000;
-uint64_t STREAM_OUTPUT_FORMAT_2 = 0x000800600803A000;
-uint64_t STREAM_OUTPUT_FORMAT_3 = 0x000800600804A000;
-uint64_t STREAM_OUTPUT_FORMAT_4 = 0x000800600805A000;
-uint64_t STREAM_OUTPUT_FORMAT_5 = 0x000800600806A000;
-
-uint64_t STREAM_OUTPUT_FORMAT_1_REVERSE =  0x00A0020840000800;
-
-void fill_jdksavdecc_descriptor_streams()
-{
-   int i;
-   char name[64];
-
-   uint64_t stream_format = 0;
-
-   switch (samplerate)
-   {
-      case 44100:
-        stream_format = be64toh(STREAM_INPUT_FORMAT_0);
-        break;
-      case 48000:
-        stream_format = be64toh(STREAM_INPUT_FORMAT_1);
-        break;
-      case 88200:
-        stream_format = be64toh(STREAM_INPUT_FORMAT_2);
-        break;
-      case 96000:
-        stream_format = be64toh(STREAM_INPUT_FORMAT_3);
-        break;
-      case 176400:
-        stream_format = be64toh(STREAM_INPUT_FORMAT_4);
-        break;
-      case 192000:
-        stream_format = be64toh(STREAM_INPUT_FORMAT_5);
-        break;
-   }
-
-   for (i=0; i<16; i++)
-   {
-      sprintf(name, "%i", i);
-      stream_input[i].descriptor_type = JDKSAVDECC_DESCRIPTOR_STREAM_INPUT;
-      stream_input[i].descriptor_index = i;
-      jdksavdecc_string_set_from_cstr(&stream_input[i].object_name, name);
-      stream_input[i].localized_description = -1;
-      stream_input[i].clock_domain_index = 0;
-      stream_input[i].stream_flags = 
-        JDKSAVDECC_DESCRIPTOR_STREAM_FLAG_CLOCK_SYNC_SOURCE |
-        JDKSAVDECC_DESCRIPTOR_STREAM_FLAG_CLASS_A;
-      jdksavdecc_eui64_init_from_uint64(&stream_input[i].current_format, stream_format);
-      stream_input[i].formats_offset= 132;
-      stream_input[i].number_of_formats = 6;
-      jdksavdecc_eui64_init_from_uint64(&stream_input[i].backup_talker_entity_id_0, 0);
-      stream_input[i].backup_talker_unique_id_0  = 0;
-      jdksavdecc_eui64_init_from_uint64(&stream_input[i].backup_talker_entity_id_1, 0);
-      stream_input[i].backup_talker_unique_id_1 = 0;
-      jdksavdecc_eui64_init_from_uint64(&stream_input[i].backup_talker_entity_id_2, 0);
-      stream_input[i].backup_talker_unique_id_2 = 0;
-      jdksavdecc_eui64_init_from_uint64(&stream_input[i].backedup_talker_entity_id, 0);
-      stream_input[i].backedup_talker_unique = 0;
-      stream_input[i].avb_interface_index = 0;
-      stream_input[i].buffer_length = 8;
-
-      stream_output[i].descriptor_type = JDKSAVDECC_DESCRIPTOR_STREAM_OUTPUT;
-      stream_output[i].descriptor_index = i;
-      jdksavdecc_string_set_from_cstr(&stream_output[i].object_name, name);
-      stream_output[i].localized_description = -1;
-      stream_output[i].clock_domain_index = 0;
-      stream_output[i].stream_flags = JDKSAVDECC_DESCRIPTOR_STREAM_FLAG_CLASS_A;
-      jdksavdecc_eui64_init_from_uint64(&stream_output[i].current_format, stream_format);
-      stream_output[i].formats_offset= 132;
-      stream_output[i].number_of_formats = 6;
-      jdksavdecc_eui64_init_from_uint64(&stream_output[i].backup_talker_entity_id_0, 0);
-      stream_output[i].backup_talker_unique_id_0  = 0;
-      jdksavdecc_eui64_init_from_uint64(&stream_output[i].backup_talker_entity_id_1, 0);
-      stream_output[i].backup_talker_unique_id_1 = 0;
-      jdksavdecc_eui64_init_from_uint64(&stream_output[i].backup_talker_entity_id_2, 0);
-      stream_output[i].backup_talker_unique_id_2 = 0;
-      jdksavdecc_eui64_init_from_uint64(&stream_output[i].backedup_talker_entity_id, 0);
-      stream_output[i].backedup_talker_unique = 0;
-      stream_output[i].avb_interface_index = 0;
-      stream_output[i].buffer_length = 8;
-   }
-
-};
-
-struct jdksavdecc_descriptor_avb_interface avb_interface;
-
-void fill_jdksavdecc_descriptor_avb_interface()
-{   
-    memset(&avb_interface, 0, sizeof(avb_interface));
-
-    avb_interface.descriptor_type = JDKSAVDECC_DESCRIPTOR_AVB_INTERFACE;
-    avb_interface.descriptor_index = 0;
-    jdksavdecc_string_set_from_cstr(&avb_interface.object_name, "");
-    avb_interface.localized_description = 0;
-    memcpy(&avb_interface.mac_address.value, MAC, 6);
-    avb_interface.interface_flags = htons
-                  (JDKSAVDECC_AVB_INTERFACE_FLAG_GPTP_GRANDMASTER_SUPPORTED |
-                   JDKSAVDECC_AVB_INTERFACE_FLAG_GPTP_SUPPORTED |
-                   JDKSAVDECC_AVB_INTERFACE_FLAG_SRP_SUPPORTED);
-    jdksavdecc_eui64_init_from_uint64(&avb_interface.clock_identity, GRANDMASTER_ID);
-    avb_interface.priority1 = 240;
-    avb_interface.clock_class = 248;
-    avb_interface.offset_scaled_log_variance = 17258;
-    avb_interface.clock_accuracy = 248;
-    avb_interface.priority2 = 238;
-    avb_interface.domain_number = 0;
-    avb_interface.log_sync_interval = -2;
-    avb_interface.log_announce_interval = 0;
-    avb_interface.log_pdelay_interval = 0;
-    avb_interface.port_number = 1;
-};
-
-struct jdksavdecc_descriptor_clock_source clock_source;
-
-void fill_jdksavdecc_descriptor_clock_source()
-{
-    clock_source.descriptor_type = JDKSAVDECC_DESCRIPTOR_CLOCK_SOURCE;
-    clock_source.descriptor_index = 0;
-    jdksavdecc_string_set_from_cstr(&clock_source.object_name, "");
-    clock_source.localized_description = 2;
-    clock_source.clock_source_flags = 0;
-    clock_source.clock_source_type = JDKSAVDECC_CLOCK_SOURCE_TYPE_INTERNAL;
-    jdksavdecc_eui64_init_from_uint64(&clock_source.clock_source_identifier, GRANDMASTER_ID);
-    clock_source.clock_source_location_type = JDKSAVDECC_DESCRIPTOR_AUDIO_UNIT;
-    clock_source.clock_source_location_index = 0;
-};
-
-struct jdksavdecc_descriptor_locale locale;
-
-void fill_jdksavdecc_descriptor_locale()
-{
-    locale.descriptor_type = JDKSAVDECC_DESCRIPTOR_LOCALE;
-    locale.descriptor_index = 0;
-    jdksavdecc_string_set_from_cstr(&locale.locale_identifier, "en-US");
-    locale.number_of_strings = 7;
-    locale.base_strings = 0;
-};
-
-int running = 1;
+volatile sig_atomic_t running = 1;
 unsigned global_available_index = 0;
 
-char *IFNAME = "eth9";
-
-int createSocket(char *name, int *ifindex, struct sockaddr *mac)
+static void on_signal(int sig)
 {
-   int sock;
-   sock = socket(AF_PACKET, SOCK_RAW, htons(0x22f0));
+   (void)sig;
+   running = 0;
+}
 
-   if (sock < 0)
-   {
-      printf("error in socket\n");
-      return -1;
+static void publish_talker_dest_macs_to_kernel(void)
+{
+   static const char path[] =
+      "/sys/module/snd_igb_avb/parameters/avb_talker_dest_macs";
+   char buf[640];  /* 32 x 17 + 31 commas = 575 */
+   int pos = 0;
+   FILE *f;
+   int i;
+
+   for (i = 0; i < g_num_streams; i++) {
+       uint8_t m[6];
+       if (i > 0) {
+           buf[pos++] = ',';
+       }
+       uint64_to_array6(g_streams[i].dest_mac, m);
+       pos += snprintf(buf + pos, sizeof(buf) - pos,
+                       "%02x:%02x:%02x:%02x:%02x:%02x",
+                       m[0], m[1], m[2], m[3], m[4], m[5]);
+       if (pos < 0 || pos >= sizeof(buf)) {
+           avb_log(L_AVTP, LOG_WARNING, "buffer overflow building dest_macs");
+           return;
+       }
    }
 
-   // Allow address reuse
-   int temp = 1;
-   if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &temp, sizeof(int)) < 0) 
-   {
-      printf("Creating sock failed to set reuseaddr\n");
-      close(sock);
-
-      return -1;
-   }
-
-   struct ifreq ifreq_i;
-
-   memset(&ifreq_i, 0, sizeof(ifreq_i));
-   strncpy(ifreq_i.ifr_name, name, IFNAMSIZ-1); //giving name of Interface
- 
-   if (ioctl(sock, SIOCGIFINDEX, &ifreq_i) < 0)
-   {
-      printf("error in index ioctl reading"); //getting Index Name
-   }
-   printf("index=%d\n", ifreq_i.ifr_ifindex);
-
-   *ifindex = ifreq_i.ifr_ifindex;
-
-   // Bind to interface
-
-   struct sockaddr_ll my_addr;
-   memset(&my_addr, 0, sizeof(my_addr));
-   my_addr.sll_family = AF_PACKET;
-   my_addr.sll_protocol = htons(0x22f0);
-   my_addr.sll_ifindex = *ifindex;
-
-   if (bind(sock, (struct sockaddr*)&my_addr, sizeof(my_addr)) == -1) 
-   {
-      printf("Error in bind socket: %s\n", strerror(errno));
-      close(sock);
-
-      return -1;
-   }
-
-   struct packet_mreq mreq;
-   memset(&mreq, 0, sizeof(struct packet_mreq));
-   mreq.mr_ifindex = *ifindex;
-   mreq.mr_type = PACKET_MR_MULTICAST;
-   mreq.mr_alen = 6;
-   memcpy(&mreq.mr_address, DMAC, 6);
-
-   if (setsockopt(sock, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) //getting MAC Address
-      printf("error setting setsockopt PACKET_ADD_MEMBERSHIP\n");
-   
-   struct ifreq ifreq_c;
-
-   memset(&ifreq_c, 0, sizeof(ifreq_c));
-   strncpy(ifreq_c.ifr_name, name, IFNAMSIZ-1); //giving name of Interface
- 
-   if (ioctl(sock, SIOCGIFHWADDR, &ifreq_c) < 0) //getting MAC Address
-      printf("error in SIOCGIFHWADDR ioctl reading\n");
-
-   memcpy(mac, &ifreq_c.ifr_hwaddr, sizeof (ifreq_c.ifr_hwaddr));
-
-   return sock;
-}
-
-
-int recvMsg(int sock, char* buffer, int buflen)
-{
-   struct sockaddr saddr;
-
-   int saddr_len = sizeof (saddr);
- 
-   //Receive a network packet and copy into buffer
-   int ret = recvfrom(sock, buffer, buflen, 0, &saddr, (socklen_t *)&saddr_len);
-
-   if (ret < 0)
-   {
-      printf("error in reading recvfrom function\n");
-   }
-   return ret;
-}
-
-int sendMsg(int sock, char* buffer, int buflen)
-{
-   int sendlen;
-
-   struct sockaddr_ll sadr_ll;
-   sadr_ll.sll_family = AF_PACKET;
-   sadr_ll.sll_ifindex = ifindex;
-   sadr_ll.sll_halen = ETH_ALEN;
-   sadr_ll.sll_addr[0] = buffer[0];
-   sadr_ll.sll_addr[1] = buffer[1];
-   sadr_ll.sll_addr[2] = buffer[2];
-   sadr_ll.sll_addr[3] = buffer[3];
-   sadr_ll.sll_addr[4] = buffer[4];
-   sadr_ll.sll_addr[5] = buffer[5];
-
-   sendlen = sendto(sock, buffer , buflen, 0, (const struct sockaddr*)&sadr_ll, sizeof(struct sockaddr_ll));
-   if (sendlen < 0)
-   {
-      printf("error in sending....sendlen=%d....errno=%d\n", sendlen, errno);
-   }
-   return sendlen;
-}
-
-void handle_entity_descriptor(int sock, char *buffer, int len)
-{
-    entity.available_index = global_available_index;
-    jdksavdecc_common_control_header_set_control_data_length(328, buffer, HEADER_OFFSET);
-    jdksavdecc_descriptor_entity_write(&entity, buffer, 0x2A, JDKSAVDECC_DESCRIPTOR_ENTITY_LEN + 0x2A);
-
-    sendMsg(sock, buffer, 354);
-}
-
-void handle_configuration_descriptor(int sock, char *buffer, int len)
-{
-    jdksavdecc_common_control_header_set_control_data_length(122, buffer, HEADER_OFFSET);
-    jdksavdecc_descriptor_configuration_write(&configuration, buffer, 0x2A, JDKSAVDECC_DESCRIPTOR_CONFIGURATION_LEN + 0x2A);
-    memcpy(&buffer[0x74], configuration_descriptors, sizeof(configuration_descriptors));
-
-    sendMsg(sock, buffer, 148);
-}
-
-void handle_audio_unit_descriptor(int sock, char *buffer, int len)
-{
-    jdksavdecc_common_control_header_set_control_data_length(184, buffer, HEADER_OFFSET);
-    jdksavdecc_descriptor_audio_unit_write(&audio_unit, buffer, 0x2A, JDKSAVDECC_DESCRIPTOR_AUDIO_UNIT_LEN + 0x2A);
-    memcpy(&buffer[0xba], samplerates, sizeof(samplerates));
-
-    sendMsg(sock, buffer, 210);
-}
-
-void handle_stream_input_descriptor(int sock, char *buffer, int len)
-{
-    int i = jdksavdecc_descriptor_stream_get_descriptor_index(buffer, 0x2A);
-
-    jdksavdecc_common_control_header_set_control_data_length(196, buffer, HEADER_OFFSET);
-    jdksavdecc_descriptor_stream_write(&stream_input[i], buffer, 0x2A, JDKSAVDECC_DESCRIPTOR_STREAM_LEN + 0x2A);
-    memcpy(&buffer[0xae], &STREAM_INPUT_FORMAT_0, sizeof(STREAM_INPUT_FORMAT_0));
-    memcpy(&buffer[0xae + 8], &STREAM_INPUT_FORMAT_1, sizeof(STREAM_INPUT_FORMAT_1));
-    memcpy(&buffer[0xae + 16], &STREAM_INPUT_FORMAT_2, sizeof(STREAM_INPUT_FORMAT_2));
-    memcpy(&buffer[0xae + 24], &STREAM_INPUT_FORMAT_3, sizeof(STREAM_INPUT_FORMAT_3));
-    memcpy(&buffer[0xae + 32], &STREAM_INPUT_FORMAT_4, sizeof(STREAM_INPUT_FORMAT_4));
-    memcpy(&buffer[0xae + 40], &STREAM_INPUT_FORMAT_5, sizeof(STREAM_INPUT_FORMAT_5));
-
-    sendMsg(sock, buffer, 222);
-}
-
-void handle_stream_output_descriptor(int sock, char *buffer, int len)
-{
-    int i = jdksavdecc_descriptor_stream_get_descriptor_index(buffer, 0x2A);
-
-    jdksavdecc_common_control_header_set_control_data_length(196, buffer, HEADER_OFFSET);
-    jdksavdecc_descriptor_stream_write(&stream_output[i], buffer, 0x2A, JDKSAVDECC_DESCRIPTOR_STREAM_LEN + 0x2A);
-    memcpy(&buffer[0xae], &STREAM_OUTPUT_FORMAT_0, sizeof(STREAM_OUTPUT_FORMAT_0));
-    memcpy(&buffer[0xae + 8], &STREAM_OUTPUT_FORMAT_1, sizeof(STREAM_OUTPUT_FORMAT_1));
-    memcpy(&buffer[0xae + 16], &STREAM_OUTPUT_FORMAT_2, sizeof(STREAM_OUTPUT_FORMAT_2));
-    memcpy(&buffer[0xae + 24], &STREAM_OUTPUT_FORMAT_3, sizeof(STREAM_OUTPUT_FORMAT_3));
-    memcpy(&buffer[0xae + 32], &STREAM_OUTPUT_FORMAT_4, sizeof(STREAM_OUTPUT_FORMAT_4));
-    memcpy(&buffer[0xae + 40], &STREAM_OUTPUT_FORMAT_5, sizeof(STREAM_OUTPUT_FORMAT_5));
-
-    sendMsg(sock, buffer, 222);
-}
-
-void handle_avb_interface_descriptor(int sock, char *buffer, int len)
-{
-    jdksavdecc_common_control_header_set_control_data_length(114, buffer, HEADER_OFFSET);
-    jdksavdecc_descriptor_avb_interface_write(&avb_interface, buffer, 0x2A, JDKSAVDECC_DESCRIPTOR_AVB_INTERFACE_LEN + 0x2A);
-
-    sendMsg(sock, buffer, 140);
-}
-
-void handle_clock_source_descriptor(int sock, char *buffer, int len)
-{
-    jdksavdecc_common_control_header_set_control_data_length(102, buffer, HEADER_OFFSET);
-    jdksavdecc_descriptor_clock_source_write(&clock_source, buffer, 0x2A, JDKSAVDECC_DESCRIPTOR_CLOCK_SOURCE_LEN + 0x2A);
-
-    sendMsg(sock, buffer, 128);
-}
-
-void handle_locale_descriptor(int sock, char *buffer, int len)
-{
-    jdksavdecc_common_control_header_set_control_data_length(88, buffer, HEADER_OFFSET);
-    jdksavdecc_descriptor_locale_write(&locale, buffer, 0x2A, JDKSAVDECC_DESCRIPTOR_LOCALE_LEN + 0x2A);
-
-    sendMsg(sock, buffer, 114);
-}
-
-void handle_clock_domain_descriptor(int sock, char *buffer, int len)
-{
-    int i;
-    struct jdksavdecc_descriptor_clock_domain cd;
-
-    cd.descriptor_type = JDKSAVDECC_DESCRIPTOR_CLOCK_DOMAIN;
-    cd.descriptor_index = 0;
-    jdksavdecc_string_set_from_cstr(&cd.object_name, "");
-    cd.localized_description = -1;
-    cd.clock_source_index = 0;
-    cd.clock_sources_offset = 76;
-    cd.clock_sources_count = 1;
-
-    jdksavdecc_common_control_header_set_control_data_length(94, buffer, HEADER_OFFSET);
-    jdksavdecc_descriptor_clock_domain_write(&cd, buffer, 0x2A, JDKSAVDECC_DESCRIPTOR_CLOCK_DOMAIN_LEN + 0x2A);
-
-    /* clock source 0 */
-
-    buffer[0x76] = 0;
-    buffer[0x77] = 0;
-
-    sendMsg(sock, buffer, 120);
-}
-
-void handle_strings_descriptor(int sock, char *buffer, int len)
-{
-    struct jdksavdecc_descriptor_strings strings;
-
-    memset(&strings, 0, sizeof(strings));
-
-    strings.descriptor_type = JDKSAVDECC_DESCRIPTOR_STRINGS;
-    strings.descriptor_index = 0;
-    jdksavdecc_string_set_from_cstr(&strings.string_0, "Drumfix");
-    jdksavdecc_string_set_from_cstr(&strings.string_1, "Linux AVB");
-    jdksavdecc_string_set_from_cstr(&strings.string_2, "Internal");
-    jdksavdecc_string_set_from_cstr(&strings.string_3, "");
-    jdksavdecc_string_set_from_cstr(&strings.string_4, "");
-    jdksavdecc_string_set_from_cstr(&strings.string_5, "");
-    jdksavdecc_string_set_from_cstr(&strings.string_6, "");
-
-    jdksavdecc_common_control_header_set_control_data_length(468, buffer, HEADER_OFFSET);
-    jdksavdecc_descriptor_strings_write(&strings, buffer, 0x2A, JDKSAVDECC_DESCRIPTOR_STRINGS_LEN + 0x2A);
-
-    sendMsg(sock, buffer, 494);
-}
-
-void handle_stream_port_input_descriptor(int sock, char *buffer, int len)
-{
-    struct jdksavdecc_descriptor_stream_port spi;
-
-    memset(&spi, 0, sizeof(spi));
-
-    spi.descriptor_type = JDKSAVDECC_DESCRIPTOR_STREAM_PORT_INPUT;
-    spi.descriptor_index = jdksavdecc_descriptor_stream_get_descriptor_index(buffer, 0x2A);
-    spi.clock_domain_index = 0;
-    spi.port_flags = 0;
-    spi.number_of_controls = 0;
-    spi.base_control = 0;
-    spi.number_of_clusters = 8;
-    spi.base_cluster = STREAM_PORT_INPUT_BASE_CLUSTER + 8 * spi.descriptor_index;
-    spi.number_of_maps = 1;
-    spi.base_map = STREAM_PORT_INPUT_BASE_MAP + spi.descriptor_index;
-    
-    jdksavdecc_common_control_header_set_control_data_length(36, buffer, HEADER_OFFSET);
-    jdksavdecc_descriptor_stream_port_write(&spi, buffer, 0x2A, JDKSAVDECC_DESCRIPTOR_STREAM_PORT_LEN + 0x2A);
-
-    sendMsg(sock, buffer, 64);
-}
-
-void handle_stream_port_output_descriptor(int sock, char *buffer, int len)
-{
-    struct jdksavdecc_descriptor_stream_port spo;
-
-    memset(&spo, 0, sizeof(spo));
-
-    spo.descriptor_type = JDKSAVDECC_DESCRIPTOR_STREAM_PORT_INPUT;
-    spo.descriptor_index = jdksavdecc_descriptor_stream_get_descriptor_index(buffer, 0x2A);
-    spo.clock_domain_index = 0;
-    spo.port_flags = JDKSAVDECC_DESCRIPTOR_STREAM_FLAG_CLOCK_SYNC_SOURCE;
-    spo.number_of_controls = 0;
-    spo.base_control = 0;
-    spo.number_of_clusters = 8;
-    spo.base_cluster = STREAM_PORT_OUTPUT_BASE_CLUSTER + 8 * spo.descriptor_index;
-    spo.number_of_maps = 1;
-    spo.base_map = STREAM_PORT_OUTPUT_BASE_MAP + spo.descriptor_index;
-    
-    jdksavdecc_common_control_header_set_control_data_length(36, buffer, HEADER_OFFSET);
-    jdksavdecc_descriptor_stream_port_write(&spo, buffer, 0x2A, JDKSAVDECC_DESCRIPTOR_STREAM_PORT_LEN + 0x2A);
-
-    sendMsg(sock, buffer, 64);
-}
-
-void handle_audio_cluster_descriptor(int sock, char *buffer, int len)
-{
-    struct jdksavdecc_descriptor_audio_cluster ac;
-
-    memset(&ac, 0, sizeof(ac));
-
-    ac.descriptor_type = JDKSAVDECC_DESCRIPTOR_AUDIO_CLUSTER;
-    ac.descriptor_index = jdksavdecc_descriptor_stream_get_descriptor_index(buffer, 0x2A);
-    struct jdksavdecc_string object_name;
-    jdksavdecc_string_set_from_cstr(&ac.object_name, "");
-    ac.localized_description = -1;
-    ac.signal_type = -1;
-    ac.signal_index = 0;
-    ac.signal_output = 0;
-    ac.path_latency = 0;
-    ac.block_latency = 0;
-    ac.channel_count = 1;
-    ac.format = JDKSAVDECC_AUDIO_CLUSTER_FORMAT_MBLA;
-
-    jdksavdecc_common_control_header_set_control_data_length(103, buffer, HEADER_OFFSET);
-    jdksavdecc_descriptor_audio_cluster_write(&ac, buffer, 0x2A, JDKSAVDECC_DESCRIPTOR_AUDIO_CLUSTER_LEN + 0x2A);
-
-    sendMsg(sock, buffer, 129);
-}
-
-void handle_audio_map_descriptor(int sock, char *buffer, int len)
-{
-    struct jdksavdecc_descriptor_audio_map am;
-    struct jdksavdecc_audio_mapping* amap = (struct jdksavdecc_audio_mapping*)buffer+50;
-    int i;
-
-    memset(&am, 0, sizeof(am));
-
-    am.descriptor_type = JDKSAVDECC_DESCRIPTOR_AUDIO_MAP;
-    am.descriptor_index = jdksavdecc_descriptor_stream_get_descriptor_index(buffer, 0x2A);
-    am.mappings_offset = 8;
-    am.number_of_mappings = 8;
-
-    jdksavdecc_common_control_header_set_control_data_length(88, buffer, HEADER_OFFSET);
-    jdksavdecc_descriptor_audio_map_write(&am, buffer, 0x2A, JDKSAVDECC_DESCRIPTOR_AUDIO_MAP_LEN + 0x2A);
-
-    for (i=0; i<8; i++)
-    {
-        amap[i].mapping_stream_index = htons(am.descriptor_index);
-        amap[i].mapping_stream_channel = htons(i);
-        amap[i].mapping_cluster_offset = htons(i);
-        amap[i].mapping_cluster_channel = 0;
-    }
-
-    sendMsg(sock, buffer, 114);
-}
-
-void handle_no_such_descriptor(int sock, char *buffer, int len)
-{
-    jdksavdecc_common_control_header_set_status(JDKSAVDECC_AEM_STATUS_NO_SUCH_DESCRIPTOR, buffer, HEADER_OFFSET);
-    sendMsg(sock, buffer, len);
-}
-
-void handle_aem_command_read_descriptor(int sock, char *buffer, int len)
-{
-    switch (jdksavdecc_descriptor_entity_get_descriptor_type(buffer, 0x2A))
-    {
-       case JDKSAVDECC_DESCRIPTOR_ENTITY:
-       {
-          handle_entity_descriptor(sock, buffer, len);
-          break;
-       }
-       case JDKSAVDECC_DESCRIPTOR_CONFIGURATION:
-       {
-          handle_configuration_descriptor(sock, buffer, len);
-          break;
-       }
-       case JDKSAVDECC_DESCRIPTOR_AUDIO_UNIT:
-       {
-          handle_audio_unit_descriptor(sock, buffer, len);
-          break;
-       }
-       case JDKSAVDECC_DESCRIPTOR_STREAM_INPUT:
-       {
-          handle_stream_input_descriptor(sock, buffer, len);
-          break;
-       }
-       case JDKSAVDECC_DESCRIPTOR_STREAM_OUTPUT:
-       {
-          handle_stream_output_descriptor(sock, buffer, len);
-          break;
-       }
-       case JDKSAVDECC_DESCRIPTOR_AVB_INTERFACE:
-       {
-          handle_avb_interface_descriptor(sock, buffer, len);
-          break;
-       }
-       case JDKSAVDECC_DESCRIPTOR_CLOCK_SOURCE:
-       {
-          handle_clock_source_descriptor(sock, buffer, len);
-          break;
-       }
-       case JDKSAVDECC_DESCRIPTOR_LOCALE:
-       {
-          handle_locale_descriptor(sock, buffer, len);
-          break;
-       }
-       case JDKSAVDECC_DESCRIPTOR_STRINGS:
-       {
-          handle_strings_descriptor(sock, buffer, len);
-          break;
-       }
-       case JDKSAVDECC_DESCRIPTOR_STREAM_PORT_INPUT:
-       {
-          handle_stream_port_input_descriptor(sock, buffer, len);
-          break;
-       }
-       case JDKSAVDECC_DESCRIPTOR_STREAM_PORT_OUTPUT:
-       {
-          handle_stream_port_output_descriptor(sock, buffer, len);
-          break;
-       }
-       case JDKSAVDECC_DESCRIPTOR_CLOCK_DOMAIN:
-       {
-          handle_clock_domain_descriptor(sock, buffer, len);
-          break;
-       }
-       case JDKSAVDECC_DESCRIPTOR_AUDIO_CLUSTER:
-       {
-          handle_audio_cluster_descriptor(sock, buffer, len);
-          break;
-       }
-       case JDKSAVDECC_DESCRIPTOR_AUDIO_MAP:
-       {
-          handle_audio_map_descriptor(sock, buffer, len);
-          break;
-       }
-       default:
-          handle_no_such_descriptor(sock, buffer, len);
-          break;
-    }
-}
-
-void handle_unimplemented_aem_command(int sock, char *buffer, int len)
-{         
-    jdksavdecc_common_control_header_set_status(JDKSAVDECC_AEM_STATUS_NOT_IMPLEMENTED, buffer, HEADER_OFFSET);
-
-    sendMsg(sock, buffer, len);
-}
-
-void handle_aem_command(int sock, char *buffer, int len)
-{
-    memcpy(buffer, &buffer[MACLEN], MACLEN);
-    memcpy(&buffer[MACLEN], MAC, MACLEN);
-    jdksavdecc_common_control_header_set_control_data(JDKSAVDECC_AECP_MESSAGE_TYPE_AEM_RESPONSE, buffer, HEADER_OFFSET);
-    jdksavdecc_common_control_header_set_status(JDKSAVDECC_AEM_STATUS_SUCCESS, buffer, HEADER_OFFSET);
-
-   switch (jdksavdecc_aecpdu_aem_get_command_type(buffer, HEADER_OFFSET))
-
-   {
-      case JDKSAVDECC_AEM_COMMAND_REGISTER_UNSOLICITED_NOTIFICATION:
-      {
-        handle_unimplemented_aem_command(sock, buffer, len);
-        break;
-      }
-      case JDKSAVDECC_AEM_COMMAND_READ_DESCRIPTOR:
-      {
-        handle_aem_command_read_descriptor(sock, buffer, len);
-        break;
-      }     
-      case JDKSAVDECC_AEM_COMMAND_GET_STREAM_FORMAT:
-      {
-        handle_unimplemented_aem_command(sock, buffer, len);
-        break;
-      }
-      case JDKSAVDECC_AEM_COMMAND_GET_SAMPLING_RATE:
-      {
-        handle_unimplemented_aem_command(sock, buffer, len);
-        break;
-      }
-      default:
-      { 
-        handle_unimplemented_aem_command(sock, buffer, len);
-        break;
-      }
-   }
-}
-
-void handle_aecp_vendor_unique_command(int sock, char *buffer, int len)
-{
-    memcpy(buffer, &buffer[MACLEN], MACLEN);
-    memcpy(&buffer[MACLEN], MAC, MACLEN);
-
-    jdksavdecc_common_control_header_set_control_data
-      (JDKSAVDECC_AECP_MESSAGE_TYPE_VENDOR_UNIQUE_RESPONSE, buffer, HEADER_OFFSET);
-
-    handle_unimplemented_aem_command(sock, buffer, len);
-}
-
-void handle_aecp(int sock, char *buffer, int len)
-{
-
-    struct jdksavdecc_eui64 target_id = jdksavdecc_common_control_header_get_stream_id(buffer, HEADER_OFFSET);
-    uint64_t target_id_a = jdksavdecc_eui64_convert_to_uint64(&target_id);
-
-    switch (jdksavdecc_common_control_header_get_control_data(buffer, HEADER_OFFSET))
-    {
-       case JDKSAVDECC_AECP_MESSAGE_TYPE_AEM_COMMAND:
-       {
-         if (target_id_a != ENTITY_ID)
-         {
-            return;
-         }
-         handle_aem_command(sock, buffer, len);
-         break;
-       }
-       case JDKSAVDECC_AECP_MESSAGE_TYPE_VENDOR_UNIQUE_COMMAND:
-       {
-         if (target_id_a != CONTROLLER_ID)
-         {
-            return;
-         }
-         handle_aecp_vendor_unique_command(sock, buffer, len);
-         break;
-       }
-       default:
-         break;
-    }
-}
-
-void handle_unimplemented_acmp_command(int sock, char *buffer, int len)
-{
-    uint8_t command_response = jdksavdecc_common_control_header_get_control_data(buffer, HEADER_OFFSET);
-
-    command_response++;
-
-    jdksavdecc_common_control_header_set_control_data(command_response, buffer, HEADER_OFFSET);
-
-    jdksavdecc_common_control_header_set_status(JDKSAVDECC_ACMP_STATUS_INCOMPATIBLE_REQUEST, buffer, HEADER_OFFSET);
-
-    sendMsg(sock, buffer, len);
-}
-
-void handle_acmp_connect_tx_command(int sock, char *buffer, int len)
-{
-    struct jdksavdecc_eui64 talker_guid = jdksavdecc_acmpdu_get_talker_entity_id(buffer, HEADER_OFFSET);
-
-    if (jdksavdecc_eui64_compare(&talker_guid, &entity_guid))
-    {
+   f = fopen(path, "w");
+   if (!f) {
+       avb_log(L_AVTP, LOG_WARNING, "cannot open %s (%s); kernel keeps baked dest",
+               path, strerror(errno));
        return;
-    }
-
-    memcpy(&buffer[MACLEN], MAC, MACLEN);
-
-    jdksavdecc_common_control_header_set_control_data(JDKSAVDECC_ACMP_MESSAGE_TYPE_CONNECT_TX_RESPONSE, buffer, HEADER_OFFSET);
-    jdksavdecc_common_control_header_set_status(JDKSAVDECC_ACMP_STATUS_SUCCESS, buffer, HEADER_OFFSET);
-
-    struct jdksavdecc_eui64 stream_id;
-
-    jdksavdecc_eui64_init_from_uint64(&stream_id, mac_to_stream_id(own_mac_address, 0));
-    jdksavdecc_common_control_header_set_stream_id(stream_id, buffer, HEADER_OFFSET);
-    
-    struct jdksavdecc_eui48 dst_mac;
-
-    jdksavdecc_eui48_init_from_uint64(&dst_mac, MCAST_BASE);
-    jdksavdecc_acmpdu_set_stream_dest_mac(dst_mac, buffer, HEADER_OFFSET);
-
-    jdksavdecc_acmpdu_set_connection_count(1, buffer, HEADER_OFFSET);
-    jdksavdecc_acmpdu_set_stream_vlan_id(2, buffer, HEADER_OFFSET);
-
-    sendMsg(sock, buffer, len);
+   }
+   if (fputs(buf, f) < 0)
+       avb_log(L_AVTP, LOG_WARNING, "failed writing talker dest_macs to kernel");
+   else
+       avb_log(L_AVTP, LOG_DEBUG, "published %d talker dest_macs to kernel", g_num_streams);
+   fclose(f);
 }
 
-void handle_acmp_connect_tx_response(int sock, char *buffer, int len)
+static int kernel_param_exists(const char *name)
 {
-    struct jdksavdecc_eui64 talker_guid = jdksavdecc_acmpdu_get_talker_entity_id(buffer, HEADER_OFFSET);
+   char path[128];
+   struct stat st;
 
-    printf("talker %lx, entity %lx\n",
-    		jdksavdecc_eui64_convert_to_uint64(&talker_guid),
-			jdksavdecc_eui64_convert_to_uint64(&entity_guid));
-/*
-    if (jdksavdecc_eui64_compare(&talker_guid, &entity_guid))
-    {
-       return;
-    }
-*/
-    memcpy(&buffer[MACLEN], MAC, MACLEN);
-
-    jdksavdecc_common_control_header_set_control_data(JDKSAVDECC_ACMP_MESSAGE_TYPE_CONNECT_RX_RESPONSE, buffer, HEADER_OFFSET);
-    jdksavdecc_common_control_header_set_status(JDKSAVDECC_ACMP_STATUS_SUCCESS, buffer, HEADER_OFFSET);
-
-    sendMsg(sock, buffer, len);
+   snprintf(path, sizeof(path), "/sys/module/snd_igb_avb/parameters/%s", name);
+   return stat(path, &st) == 0 || errno != ENOENT;
 }
 
-void handle_acmp_get_rx_state_command(int sock, char *buffer, int len)
+static int write_kernel_param(const char *name, const char *val)
 {
-    struct jdksavdecc_eui64 listener_guid = jdksavdecc_acmpdu_get_listener_entity_id(buffer, HEADER_OFFSET);
+   char path[128];
+   FILE *f;
+   int err;
 
-    if (jdksavdecc_eui64_compare(&listener_guid, &entity_guid))
-    {
-       return;
-    }
-
-    memcpy(&buffer[MACLEN], MAC, MACLEN);
-
-    jdksavdecc_common_control_header_set_control_data(JDKSAVDECC_ACMP_MESSAGE_TYPE_GET_RX_STATE_RESPONSE, buffer, HEADER_OFFSET);
-    jdksavdecc_common_control_header_set_status(JDKSAVDECC_ACMP_STATUS_SUCCESS, buffer, HEADER_OFFSET);
-
-    struct jdksavdecc_eui64 stream_id;
-
-    uint64_t uint64_remote_stream_id = mac_to_stream_id(avb_device_source_mac, 0);
-
-    jdksavdecc_eui64_init_from_uint64(&stream_id, uint64_remote_stream_id);
-    jdksavdecc_common_control_header_set_stream_id(stream_id, buffer, HEADER_OFFSET);
-    
-    struct jdksavdecc_eui64 talker_entity_id;
-
-    uint64_t uint64_remote_talker_entity_id = mac_to_entity_id(avb_device_source_mac);
-
-    jdksavdecc_eui64_init_from_uint64(&talker_entity_id, uint64_remote_talker_entity_id);
-    jdksavdecc_acmpdu_set_talker_entity_id(talker_entity_id, buffer, HEADER_OFFSET);
-
-    struct jdksavdecc_eui48 dst_mac;
-
-    uint64_t uint64_remote_destination_mac = avb_device_talker_mac_base;
-
-    jdksavdecc_eui48_init_from_uint64(&dst_mac, uint64_remote_destination_mac);
-    jdksavdecc_acmpdu_set_stream_dest_mac(dst_mac, buffer, HEADER_OFFSET);
-
-    jdksavdecc_acmpdu_set_connection_count(1, buffer, HEADER_OFFSET);
-    jdksavdecc_acmpdu_set_stream_vlan_id(2, buffer, HEADER_OFFSET);
-
-    sendMsg(sock, buffer, len);
+   snprintf(path, sizeof(path), "/sys/module/snd_igb_avb/parameters/%s", name);
+   f = fopen(path, "w");
+   if (!f)
+      return -1;
+   err = fputs(val, f) < 0;
+   if (fclose(f))
+      err = 1;
+   return err ? -1 : 0;
 }
 
-void handle_acmp(int sock, char *buffer, int len)
+static int listener_valid(const struct acmp_conn *rx)
 {
-    switch (jdksavdecc_common_control_header_get_control_data(buffer, HEADER_OFFSET))
-    {
-       case JDKSAVDECC_ACMP_MESSAGE_TYPE_CONNECT_TX_COMMAND:
-       {
-         handle_acmp_connect_tx_command(sock, buffer, len);
-         break;
-       }
-       case JDKSAVDECC_ACMP_MESSAGE_TYPE_CONNECT_TX_RESPONSE:
-       {
-         handle_acmp_connect_tx_response(sock, buffer, len);
-         break;
-       }
-       case JDKSAVDECC_ACMP_MESSAGE_TYPE_DISCONNECT_TX_COMMAND:
-       {
-         //handle_acmp_disconnect_tx_command(sock, buffer, len);
-         break;
-       }
-       case JDKSAVDECC_ACMP_MESSAGE_TYPE_DISCONNECT_TX_RESPONSE:
-       {
-         //handle_acmp_disconnect_tx_command(sock, buffer, len);
-         break;
-       }
-       case JDKSAVDECC_ACMP_MESSAGE_TYPE_GET_TX_STATE_COMMAND:
-       {
-         //handle_acmp_get_tx_state_command(sock, buffer, len);
-         break;
-       }
-       case JDKSAVDECC_ACMP_MESSAGE_TYPE_GET_TX_STATE_RESPONSE:
-       {
-         //handle_acmp_get_tx_state_response(sock, buffer, len);
-         break;
-       }
-       case JDKSAVDECC_ACMP_MESSAGE_TYPE_CONNECT_RX_COMMAND:
-       {
-         //handle_acmp_connect_rx_command(sock, buffer, len);
-         break;
-       }
-       case JDKSAVDECC_ACMP_MESSAGE_TYPE_CONNECT_RX_RESPONSE:
-       {
-         //handle_acmp_connect_rx_response(sock, buffer, len);
-         break;
-       }
-       case JDKSAVDECC_ACMP_MESSAGE_TYPE_DISCONNECT_RX_COMMAND:
-       {
-         //handle_acmp_disconnect_rx_command(sock, buffer, len);
-         break;
-       }
-       case JDKSAVDECC_ACMP_MESSAGE_TYPE_DISCONNECT_RX_RESPONSE:
-       {
-         //handle_acmp_disconnect_rx_response(sock, buffer, len);
-         break;
-       }
-       case JDKSAVDECC_ACMP_MESSAGE_TYPE_GET_RX_STATE_COMMAND:
-       {
-         //handle_acmp_get_rx_state_command(sock, buffer, len);
-         break;
-       }
-       case JDKSAVDECC_ACMP_MESSAGE_TYPE_GET_RX_STATE_RESPONSE:
-       {
-         //handle_acmp_get_rx_state_response(sock, buffer, len);
-         break;
-       }
-       case JDKSAVDECC_ACMP_MESSAGE_TYPE_GET_TX_CONNECTION_COMMAND:
-       {
-         //handle_acmp_get_tx_connection_command(sock, buffer, len);
-         break;
-       }
-       case JDKSAVDECC_ACMP_MESSAGE_TYPE_GET_TX_CONNECTION_RESPONSE:
-       {
-         //handle_acmp_get_tx_connection_response(sock, buffer, len);
-         break;
-       }
-       default:
-         break;
-    }
+   return rx->bound && rx->dest_mac && rx->stream_id && rx->stream_id != ~0ULL;
 }
 
-void handle_avpdu(AVPDU_HEADER *p)
+static void publish_listener_identities_to_kernel(void)
 {
+   static char last_dst[640], last_src[640], last_sid[640];  /* 32 x 17 + 31 commas */
+   static uint64_t logged_sid[MAX_STREAMS];
+   static int published, warned, no_sid_param;
+   char dst[640], src[640], sid[640];
+   int dp = 0, sp = 0, ip = 0;
+   uint32_t uid_mismatch = 0;
+   int bound = 0;
 
+   dst[0] = src[0] = sid[0] = '\0';
+   for (int k = 0; k < g_num_streams; k++) {
+      struct acmp_conn rx = acmp_rx_get(k);
+
+      if (k) {
+         dp += snprintf(dst + dp, sizeof(dst) - dp, ",");
+         sp += snprintf(src + sp, sizeof(src) - sp, ",");
+         ip += snprintf(sid + ip, sizeof(sid) - ip, ",");
+      }
+      if (listener_valid(&rx)) {
+         uint8_t d[6], s[6];
+
+         uint64_to_array6(rx.dest_mac, d);
+         uint64_to_array6(rx.stream_id >> 16, s);
+         dp += snprintf(dst + dp, sizeof(dst) - dp,
+                        "%02x:%02x:%02x:%02x:%02x:%02x",
+                        d[0], d[1], d[2], d[3], d[4], d[5]);
+         sp += snprintf(src + sp, sizeof(src) - sp,
+                        "%02x:%02x:%02x:%02x:%02x:%02x",
+                        s[0], s[1], s[2], s[3], s[4], s[5]);
+         ip += snprintf(sid + ip, sizeof(sid) - ip, "%016llx",
+                        (unsigned long long)rx.stream_id);
+         if ((rx.stream_id & 0xffff) != (uint64_t)k)
+            uid_mismatch |= 1u << k;
+         bound++;
+      }
+      if (dp >= (int)sizeof(dst) || sp >= (int)sizeof(src) || ip >= (int)sizeof(sid)) {
+         avb_log(L_AVDECC, LOG_WARNING, "buffer overflow building listener identities");
+         return;
+      }
+   }
+
+   if (published && !strcmp(dst, last_dst) && !strcmp(src, last_src) &&
+       !strcmp(sid, last_sid))
+      return;
+
+   /* dest first, src last: emptying a dest unbinds the stream on the first write */
+   if (write_kernel_param("avb_listener_dest_macs", dst))
+      goto fail;
+   if (!no_sid_param && !kernel_param_exists("avb_listener_stream_ids")) {
+      no_sid_param = 1;
+      avb_log(L_AVDECC, LOG_WARNING,
+              "kernel module has no avb_listener_stream_ids (older module?): "
+              "publishing MACs only, the kernel derives stream id src<<16|k");
+   }
+   if (!no_sid_param && write_kernel_param("avb_listener_stream_ids", sid))
+      goto fail;
+   if (write_kernel_param("avb_listener_src_macs", src))
+      goto fail;
+   warned = 0;
+   memcpy(last_dst, dst, sizeof(dst));
+   memcpy(last_src, src, sizeof(src));
+   memcpy(last_sid, sid, sizeof(sid));
+   published = 1;
+   avb_log(L_AVDECC, LOG_INFO, "published listener MACs (%d/%d bound): dest=%s src=%s",
+           bound, g_num_streams, dst, src);
+   for (int k = 0; k < g_num_streams; k++) {
+      struct acmp_conn rx = acmp_rx_get(k);
+      uint64_t id = listener_valid(&rx) ? rx.stream_id : 0;
+
+      if (id == logged_sid[k])
+         continue;
+      logged_sid[k] = id;
+      if (!id)
+         continue;
+      if (!no_sid_param)
+         avb_log(L_AVDECC, LOG_INFO, "listener %d <- talker %016llx", k,
+                 (unsigned long long)id);
+      else if (uid_mismatch & (1u << k))
+         avb_log(L_AVDECC, LOG_WARNING,
+                 "listener[%d] is connected to talker source %llu, not %d: the kernel expects stream id src<<16|%d and will drop it",
+                 k, (unsigned long long)(id & 0xffff), k, k);
+   }
+   return;
+
+fail:
+   if (!warned)
+      avb_log(L_AVDECC, LOG_WARNING,
+              "cannot publish listener identities to kernel (%s); streams 1..N-1 stay unbound",
+              strerror(errno));
+   warned = 1;
 }
 
-void handle_entity_discover()
+static void publish_sync_state_to_kernel(int synced, int64_t offset_ns)
 {
+   FILE *f = fopen("/proc/snd_igb_avb/tx_engine", "w");
 
+   if (!f) {
+      static int warned;
+      if (!warned) {
+         avb_log(L_AVTP, LOG_WARNING, "cannot publish gPTP sync state to kernel (%s)",
+                 strerror(errno));
+         warned = 1;
+      }
+      return;
+   }
+   fprintf(f, "sync_state=%u offset_ns=%lld\n", synced ? 1 : 0,
+           (long long)offset_ns);
+   fclose(f);
 }
 
-void handle_entity_available(char *buffer)
+
+/* must equal the per-frame overhead the kernel's avb_stream_idleslope_bps() adds */
+#define MSRP_PER_FRAME_OVERHEAD_BYTES 42
+
+static uint64_t stream_reserved_bps(int pktsz, int interval)
 {
-
+    return (uint64_t)(pktsz + MSRP_PER_FRAME_OVERHEAD_BYTES) * 8 * 8000 * (uint64_t)interval;
 }
 
-void handle_entity_departing(char *buffer)
+static int clamp_stream_count(long n)
 {
-
-}
-
-void handle_aem(int sock, char *buffer, int len)
-{
-    int cmd = jdksavdecc_common_control_header_get_control_data(buffer, HEADER_OFFSET);
-
-    switch (cmd)
-    {
-       case JDKSAVDECC_ADP_MESSAGE_TYPE_ENTITY_DISCOVER:
-         handle_entity_discover();
-         break;
-       case JDKSAVDECC_ADP_MESSAGE_TYPE_ENTITY_AVAILABLE:
-         handle_entity_available(buffer);
-         break;
-       case JDKSAVDECC_ADP_MESSAGE_TYPE_ENTITY_DEPARTING:
-         handle_entity_departing(buffer);
-         break;
-       default:
-         printf("handle_aem_command: invalid command %d\n", cmd);
-    }
-}
-
-void *handle_22f0_msg(void *arg)
-{
-     int sock = *(int *)arg;
-
-     #define MAX_MSGLEN 1500
-
-     int res = 0;
-
-     char *msg = malloc(MAX_MSGLEN);
-
-     size_t COMMON_HEADER_START = 14;
- 
-     while (running)
-     {
-        res = recvMsg(sock, msg, MAX_MSGLEN);
-
-        if (res >= 0)
-        {
-           uint8_t  subtype =jdksavdecc_common_control_header_get_subtype(msg, COMMON_HEADER_START);
-
-           if (jdksavdecc_common_control_header_get_subtype(msg, COMMON_HEADER_START))
-           {
-           //printf("msgtype = %02x\n", jdksavdecc_common_control_header_get_subtype(msg, COMMON_HEADER_START));
-           }
-
-           switch (jdksavdecc_common_control_header_get_subtype(msg, COMMON_HEADER_START))
-           {
-              case 0x7a:
-              {
-                // discovery
-            	//printf("msgtype = %x\n", subtype);
-                handle_aem(sock, msg, res);
-                break;
-              }
-              case 0x7b:
-              {
-              	//printf("msgtype = %x\n", subtype);
-                handle_aecp(sock, msg, res);
-                break;
-              }
-              case 0x7c:
-              {
-              	//printf("msgtype = %x\n", subtype);
-                handle_acmp(sock, msg, res);
-                break;
-              }
-              case 0x7e:
-              {
-                // maap
-                //printf("msgtype = %x\n", subtype);
-                break;
-              }
-              case 0:
-            	  handle_avpdu((AVPDU_HEADER *)msg);
-            	  break;
-              default:
-                //other;
-                break;
-            }
-        }     
-     }
-     return NULL;
-}
-
-uint64_t parse_mac(const char *mac_str) {
-   uint64_t mac = 0;
-   sscanf(mac_str, "%12lx", &mac);
-   return mac;
+   if (n < 1)
+      return 1;
+   if (n > MAX_STREAMS)
+      return MAX_STREAMS;
+   return (int)n;
 }
 
 int main(int argc, char **argv)
 {
    struct sockaddr mac;
 
-   uint32_t channels_per_stream = 8;
+   uint32_t channels_per_stream = CHANNELS_PER_STREAM;
    uint32_t bytes_per_sample = 4;
    uint32_t samples_per_interval = 6;
 
-   if (argc < 6)
-   {
-      printf("usage: avb-user <name of ethernet interface> <samplerate> <avb device talker mac base> <avb device source mac> <i210 own mac>\n");
+   if (argc < 3) {
+      fprintf(stderr, "usage: avb-user <name of ethernet interface> <samplerate> [num_streams]\n");
       exit(1);
    }
 
-   int sock = createSocket(argv[1], &ifindex, &mac);
+   avb_log_init();
+   signal(SIGINT,  on_signal);
+   signal(SIGTERM, on_signal);
+   avb_log(L_SYS, LOG_INFO, "avb-user starting on %s", argv[1]);
+
+   g_device_source_mac = parse_mac_u64(getenv("AVB_DEVICE_SOURCE_MAC"), g_device_source_mac);
+   g_device_talker_mac = parse_mac_u64(getenv("AVB_DEVICE_TALKER_MAC_BASE"), g_device_talker_mac);
+
+   if (!g_device_source_mac || !g_device_talker_mac) {
+      avb_log(L_SYS, LOG_ERR, "AVB_DEVICE_SOURCE_MAC and AVB_DEVICE_TALKER_MAC_BASE "
+                              "must be set (no default -- they are individual per device)");
+      fprintf(stderr, "error: AVB_DEVICE_SOURCE_MAC and AVB_DEVICE_TALKER_MAC_BASE "
+                      "must be set (no default -- they are individual per device)\n");
+      return -1;
+   }
 
    samplerate = atoi(argv[2]);
+   switch (samplerate) {
+      case 44100:
+      case 48000:  samples_per_interval = 6;  break;
+      case 88200:
+      case 96000:  samples_per_interval = 12; break;
+      case 176400:
+      case 192000: samples_per_interval = 24; break;
+      default:
+         avb_log(L_SYS, LOG_ERR, "unsupported samplerate %d", samplerate);
+         fprintf(stderr, "error: unsupported samplerate %d\n", samplerate);
+         exit(1);
+   }
 
-   switch (samplerate)
    {
-       case 44100:
-       case 48000:
-          samples_per_interval = 6;
-          break;
-       case 88200:
-       case 96000:
-          samples_per_interval = 12;
-          break;
-       case 176400:
-       case 192000:
-          samples_per_interval = 24;
-          break;
-       default:
-          printf("Unsuppoerted samplerate %d\n", samplerate);
-          exit(1);
+      const char *env_streams = getenv("AVB_NUM_STREAMS");
+      long n = 1;
+
+      if (env_streams && env_streams[0]) {
+         char *end = NULL;
+         n = strtol(env_streams, &end, 10);
+         if (end == env_streams || *end != '\0') {
+            avb_log(L_SYS, LOG_WARNING, "invalid AVB_NUM_STREAMS=%s, using 1", env_streams);
+            n = 1;
+         }
+      }
+      if (argc >= 4) {
+         char *end = NULL;
+         n = strtol(argv[3], &end, 10);
+         if (end == argv[3] || *end != '\0')
+            avb_log(L_SYS, LOG_WARNING, "invalid stream count %s, using %d", argv[3], g_num_streams);
+      }
+      g_num_streams = clamp_stream_count(n);
+      if (g_num_streams != n) {
+         avb_log(L_SYS, LOG_WARNING, "stream count %ld clamped to %d", n, g_num_streams);
+      }
+   }
+
+   int sock = avtp_socket_create(argv[1], &mac);
+   if (sock < 0) {
+      avb_log(L_SYS, LOG_ERR, "failed to create AVTP socket");
+      return -1;
+   }
+   ifindex = avtp_ifindex;
+
+    memcpy(MAC, &mac.sa_data, MACLEN);
+    own_mac_address = array6_to_uint64(MAC);
+
+    {
+        char hostname[64];
+        if (gethostname(hostname, sizeof(hostname)) == 0) {
+            descriptor_set_entity_name(hostname);
+            avb_log(L_SYS, LOG_INFO, "entity name: %s AVB", hostname);
+        } else {
+            avb_log(L_SYS, LOG_WARNING, "gethostname failed, using default entity name");
+        }
+    }
+
+   for (int i = 0; i < g_num_streams; i++) {
+      g_streams[i].local_mac = own_mac_address;
+      g_streams[i].peer_mac = g_device_source_mac;
+      g_streams[i].dest_mac = MCAST_BASE;
+      g_streams[i].stream_id = AVB_STREAM_ID(own_mac_address, i);
+      g_streams[i].peer_entity_id = mac_to_entity_id(g_device_source_mac);
+   }
+
+   ENTITY_ID      = mac_to_entity_id(own_mac_address);
+   CONTROLLER_ID  = mac_to_controller_id(own_mac_address);
+   /* controllers cache the AEM by entity_model_id, so N must be folded into it */
+   MODEL_ID       = 0xa08cfd0000000005ULL + ((uint64_t)(g_num_streams - 1) << 16);
+   GRANDMASTER_ID = mac_to_entity_id(own_mac_address);
+   jdksavdecc_eui64_init_from_uint64(&entity_guid, ENTITY_ID);
+
+    gptp_client_init();
+
+    int talker_dest_lvl = MAAP_LVL_DYNAMIC;
+    uint64_t dest_base = MCAST_BASE;
+    unsigned dest_count = g_num_streams;
+    if (getenv("AVB_MAAP") && strcmp(getenv("AVB_MAAP"), "0") == 0) {
+        status_update_maap(MCAST_BASE, MAAP_LVL_FIXED, g_num_streams);
+        talker_dest_lvl = MAAP_LVL_FIXED;
+    } else {
+        g_maap_ctx.base = MCAST_BASE;
+        g_maap_ctx.count = g_num_streams;
+        int maap_rc = maap_client_init(&g_maap_ctx);
+        if (maap_rc == 0) {
+            maap_rc = maap_acquire_adresses(&g_maap_ctx);
+        }
+        if (maap_rc == 0) {
+            talker_dest_lvl = MAAP_LVL_DYNAMIC;
+            dest_base = g_maap_ctx.base;
+            dest_count = g_maap_ctx.count;
+            status_update_maap(g_maap_ctx.base, MAAP_LVL_DYNAMIC, g_maap_ctx.count);
+            avb_log(L_AVDECC, LOG_INFO, "MAAP allocated block base=0x%012llx count=%u (requested %d)",
+                    (unsigned long long)g_maap_ctx.base, g_maap_ctx.count, g_num_streams);
+        } else {
+            g_maap_ctx.count = 0;
+            talker_dest_lvl = MAAP_LVL_FALLBACK;
+            status_update_maap(MCAST_BASE, MAAP_LVL_FALLBACK, g_num_streams);
+            avb_log(L_AVDECC, LOG_WARNING, "MAAP unavailable, using fixed base 0x%012llx (fallback)",
+                    (unsigned long long)MCAST_BASE);
+        }
+    }
+
+    if (dest_count < (unsigned)g_num_streams)
+        avb_log(L_AVDECC, LOG_ERR, "MAAP granted only %u of %d addresses (base=0x%012llx): streams %u..%d use the UNRESERVED fixed base 0x%012llx + index",
+                dest_count, g_num_streams, (unsigned long long)dest_base,
+                dest_count, g_num_streams - 1, (unsigned long long)MCAST_BASE);
+    for (int i = 0; i < g_num_streams; i++) {
+        uint64_t stream_dest = ((unsigned)i < dest_count ? dest_base : MCAST_BASE) + i;
+        stream_dest &= 0xffffffffffffULL;
+        g_streams[i].dest_mac = stream_dest;
+        avb_log(L_AVDECC, LOG_DEBUG, "stream[%d] dest_mac=0x%012llx (from block base=0x%012llx)",
+                i, (unsigned long long)stream_dest, (unsigned long long)dest_base);
+    }
+
+    publish_talker_dest_macs_to_kernel();
+    avb_log(L_AVTP, LOG_INFO, "talker dest block base=0x%012llx count=%u (%s)",
+            (unsigned long long)dest_base, dest_count,
+            talker_dest_lvl == MAAP_LVL_DYNAMIC ? "MAAP" : "fixed");
+
+    msrp_domain_init();
+   msrp_talker_init();
+   msrp_listener_init();
+   avdecc_adp_init(ENTITY_ID, MODEL_ID, GRANDMASTER_ID);
+   avdecc_aecp_init();
+   avdecc_aecp_init_descriptors();
+   avdecc_acmp_init(ENTITY_ID, CONTROLLER_ID, GRANDMASTER_ID);
+   acmp_conns_init();
+   descriptor_init(samplerate, ENTITY_ID, MODEL_ID, GRANDMASTER_ID);
+   avdecc_aecp_set_samplerate(samplerate);
+
+   avb_log(L_AVDECC, LOG_INFO, "advertising %d streams (model_id=%016llx)",
+           g_num_streams, (unsigned long long)MODEL_ID);
+    for (int i = 0; i < g_num_streams; i++) {
+         avb_log(L_AVDECC, LOG_INFO, "stream[%d] local=%012llx peer=%012llx dest=%012llx sid=%016llx",
+                 i,
+                 (unsigned long long)g_streams[i].local_mac,
+                 (unsigned long long)g_streams[i].peer_mac,
+                 (unsigned long long)g_streams[i].dest_mac,
+                 (unsigned long long)g_streams[i].stream_id);
+    }
+
+     {
+         struct avb_stream s[MAX_STREAMS];
+         memset(s, 0, sizeof(s));
+         for (int i = 0; i < g_num_streams; i++) {
+             s[i].stream_id = g_streams[i].stream_id;
+             s[i].dest_mac[0] = (g_streams[i].dest_mac >> 40) & 0xff;
+             s[i].dest_mac[1] = (g_streams[i].dest_mac >> 32) & 0xff;
+             s[i].dest_mac[2] = (g_streams[i].dest_mac >> 24) & 0xff;
+             s[i].dest_mac[3] = (g_streams[i].dest_mac >> 16) & 0xff;
+             s[i].dest_mac[4] = (g_streams[i].dest_mac >> 8) & 0xff;
+             s[i].dest_mac[5] = g_streams[i].dest_mac & 0xff;
+             s[i].vlan = 0x6002;
+             s[i].sequence = 0;
+             s[i].dbc = 0;
+             s[i].format = 0;
+             s[i].channels = CHANNELS_PER_STREAM;
+             s[i].samplerate = samplerate;
+         }
+         status_update_streams(g_num_streams, s, NULL);
      }
 
-   avb_device_talker_mac_base = parse_mac(argv[3]);
-   avb_device_source_mac = parse_mac(argv[4]);
-   own_mac = parse_mac(argv[5]);
-
-   /* initialize MAC address */
-
-   memcpy(MAC, &mac.sa_data, MACLEN);
-
-   own_mac_address = array6_to_uint64(MAC);
-
-   ENTITY_ID = mac_to_entity_id(own_mac_address);
-   CONTROLLER_ID = mac_to_controller_id(own_mac_address);
-   MODEL_ID = 1;
-   GRANDMASTER_ID = mac_to_entity_id(own_mac_address);
-
-   REMOTE_ENTITY_ID = mac_to_entity_id(avb_device_source_mac);
-   REMOTE_TALKER_ID = mac_to_entity_id(avb_device_source_mac);
-   REMOTE_LISTENER_ID = mac_to_entity_id(avb_device_source_mac);
-
-   uint8_t ix_stream[8];
-   uint8_t ix_mac[6];
-
-   uint8_t ox_stream[8];
-   uint8_t ox_mac[6];
-
-   uint64_t F_STREAM = 0xFFFFFFFFFFFFFFFF;
-   uint64_t F_MAC = 0xFFFFFFFFFFFF;
-
-   jdksavdecc_eui64_init_from_uint64(&entity_guid, ENTITY_ID);
-   jdksavdecc_eui64_init_from_uint64(&controller_guid, CONTROLLER_ID);
-   jdksavdecc_eui64_init_from_uint64(&grandmaster_id, GRANDMASTER_ID);
-
-
-   jdksavdecc_eui64_init_from_uint64(&remote_talker_guid, REMOTE_TALKER_ID);
-   jdksavdecc_eui64_init_from_uint64(&remote_listener_guid, REMOTE_LISTENER_ID);
-
-   jdksavdecc_eui64_init_from_uint64(&f_stream, F_STREAM);
-   jdksavdecc_eui48_init_from_uint64(&f_mac, F_MAC);
-
-   int rc;
-
-   fill_jdksavdecc_descriptor_entity();
-   fill_jdksavdecc_descriptor_configuration();
-   fill_jdksavdecc_descriptor_audio_unit(samplerate);
-   fill_jdksavdecc_descriptor_streams();
-   fill_jdksavdecc_descriptor_avb_interface();
-   fill_jdksavdecc_descriptor_clock_source();
-   fill_jdksavdecc_descriptor_locale();
-
-   /* initialize our ids as used by jdksavdecc */
-
-   /* initialize entity_id */
-
-   jdksavdecc_eui64_init_from_uint64(&entity_guid, ENTITY_ID);
-
-   /* initialize model_id */
-
-   jdksavdecc_eui64_init_from_uint64(&model_id, MODEL_ID);
-
-   /* initialize grandmaster_id */
-
-   jdksavdecc_eui64_init_from_uint64(&grandmaster_id, GRANDMASTER_ID);
-
-   /* initialize controller id */
-
-   jdksavdecc_eui64_init_from_uint64(&controller_guid, CONTROLLER_ID);
-
-   uint64_to_array6(avb_device_talker_mac_base, ix_mac);
-   uint64_to_array8(avb_device_source_mac << 16, ix_stream);
-
-   uint64_to_array6(MCAST_BASE, ox_mac);
-   uint64_to_array8(own_mac_address << 16, ox_stream);
-
-   /* open igb_avb */
-/*
-   int fd = open("/dev/igb_avb", O_RDWR);
-
-   if (fd < 0)
-   {
-       printf("Could not open igb_avb.\n");
-       exit(1);
-   }
-*/
-   /* maap 
-      ignore for now. we use the locally administered MAAP MAC pool instead
-
-   struct maap_record data;
-
-   data.base = MCAST_BASE;
-   data.count = NUM_STREAMS;
-
-   rc = maap_client_init(&data);
-   if (rc < 0)
-   {
-      printf("Could not acquire multicast range for talker streams.\n");
-      exit(1);
-   }
-   */
-
-   // mrp setup
+   avb_log(L_AVTP, LOG_INFO, "talker stream-id=%016llx listener stream-id=%016llx",
+           (unsigned long long)AVB_STREAM_ID(own_mac_address, 0),
+           (unsigned long long)AVB_STREAM_ID(g_device_source_mac, 0));
 
    int halt_mrp = 0;
+   int rc;
 
-   mrp_client_init(my_talker_cb,
-                   my_listener_cb,
+   mrp_client_init(msrp_listener_on_talker_declaration,
+                   msrp_talker_on_listener_declaration,
                    my_domain_cb);
-
    mrp_connect(&halt_mrp);
 
-   struct mrp_domain_attr attr;
+   rc = msrp_domain_register(MSRP_CLASS_A_ID, MSRP_CLASS_A_PRIORITY, MSRP_CLASS_A_VLAN);
+   avb_log(L_MSRP, LOG_DEBUG, "msrp_domain_register rc=%d", rc);
 
-   attr.id = CLASS_A_ID;
-   attr.priority = CLASS_A_PRIORITY;
-   attr.vid = CLASS_A_VLAN;
+   rc = msrp_domain_join_vlan(MSRP_CLASS_A_ID, MSRP_CLASS_A_PRIORITY, MSRP_CLASS_A_VLAN);
+   avb_log(L_MSRP, LOG_DEBUG, "msrp_domain_join_vlan (MVRP) rc=%d", rc);
 
-   rc = mrp_register_domain(&attr);
-   printf("rc = %d, mrp_register_domain\n", rc);
-
-   rc = mrp_join_vlan(&attr);      
-   printf("rc = %d, mrp_join_vlan\n", rc);
-
-   char buffer[128];
-
-   struct pollfd fdset[1];
-
-   struct jdksavdecc_adpdu_common_control_header adp_header;
-
-   adp_header.cd = 1;
-   adp_header.subtype = JDKSAVDECC_SUBTYPE_ADP;
-   adp_header.sv = 0;
-   adp_header.version = 0;
-   adp_header.message_type = JDKSAVDECC_ADP_MESSAGE_TYPE_ENTITY_AVAILABLE;
-   adp_header.valid_time = 10;
-   adp_header.control_data_length = 56;
-   adp_header.entity_id = entity_guid;
-
-   struct jdksavdecc_adpdu adpdu;
-
-   adpdu.header = adp_header;
-   adpdu.entity_model_id = model_id;
-   adpdu.entity_capabilities = 
-      JDKSAVDECC_ADP_ENTITY_CAPABILITY_AEM_SUPPORTED |
-      JDKSAVDECC_ADP_ENTITY_CAPABILITY_CLASS_A_SUPPORTED |
-      JDKSAVDECC_ADP_ENTITY_CAPABILITY_GPTP_SUPPORTED |
-      JDKSAVDECC_ADP_ENTITY_CAPABILITY_AEM_IDENTIFY_CONTROL_INDEX_VALID |
-      JDKSAVDECC_ADP_ENTITY_CAPABILITY_AEM_INTERFACE_INDEX_VALID;
-   adpdu.talker_stream_sources = 16;
-   adpdu.talker_capabilities = 
-      JDKSAVDECC_ADP_TALKER_CAPABILITY_IMPLEMENTED |
-      JDKSAVDECC_ADP_TALKER_CAPABILITY_AUDIO_SOURCE;
-   adpdu.listener_stream_sinks = 16;
-   adpdu.listener_capabilities =
-      JDKSAVDECC_ADP_LISTENER_CAPABILITY_IMPLEMENTED |
-      JDKSAVDECC_ADP_LISTENER_CAPABILITY_AUDIO_SINK;
-   adpdu.controller_capabilities = 0;
-   adpdu.available_index = 0;
-   jdksavdecc_eui64_init_from_uint64(&adpdu.gptp_grandmaster_id, GRANDMASTER_ID);
-   adpdu.gptp_domain_number = 0;
-   adpdu.reserved0 = 0;
-   adpdu.identify_control_index = 0;
-   adpdu.interface_index = 0;
-   jdksavdecc_eui64_init_from_uint64(&adpdu.association_id, 0);
-   adpdu.reserved1 = 0;
-
-   printf("Setting samplerate to %d.\n", samplerate);
-
-   /* set samplingrate */
-
-   struct jdksavdecc_aem_command_set_sampling_rate aem_cmd;
-
-   aem_cmd.aem_header.aecpdu_header.header.cd = 1;
-   aem_cmd.aem_header.aecpdu_header.header.subtype = JDKSAVDECC_SUBTYPE_AECP;
-   aem_cmd.aem_header.aecpdu_header.header.sv = 0;
-   aem_cmd.aem_header.aecpdu_header.header.version = 0;
-   aem_cmd.aem_header.aecpdu_header.header.message_type = JDKSAVDECC_AECP_MESSAGE_TYPE_AEM_COMMAND;
-   aem_cmd.aem_header.aecpdu_header.header.status = JDKSAVDECC_AEM_STATUS_SUCCESS;
-   aem_cmd.aem_header.aecpdu_header.header.control_data_length = JDKSAVDECC_AEM_COMMAND_SET_SAMPLING_RATE_COMMAND_LEN;
-   jdksavdecc_eui64_init_from_uint64(&aem_cmd.aem_header.aecpdu_header.header.target_entity_id, REMOTE_ENTITY_ID);
-   jdksavdecc_eui64_init_from_uint64(&aem_cmd.aem_header.aecpdu_header.controller_entity_id, CONTROLLER_ID);
-   aem_cmd.aem_header.aecpdu_header.sequence_id = 1;
-   aem_cmd.aem_header.command_type = JDKSAVDECC_AEM_COMMAND_SET_SAMPLING_RATE;
-
-   aem_cmd.descriptor_type = JDKSAVDECC_DESCRIPTOR_AUDIO_UNIT;
-   aem_cmd.descriptor_index = 0;
-   aem_cmd.sampling_rate = samplerate;
-
-   memcpy(buffer, DMAC, 6);
-   memcpy(&buffer[6], MAC, 6);
-
-   buffer[12] = 0x22; buffer[13] = 0xf0;
-   jdksavdecc_aem_command_set_sampling_rate_write(&aem_cmd, &buffer[14], 0, sizeof(buffer));
-
-   sendMsg(sock, buffer, 14 + JDKSAVDECC_AEM_COMMAND_SET_SAMPLING_RATE_COMMAND_LEN);
-
+   avdecc_aecp_send_set_sampling_rate(sock, samplerate);
    sleep(5);
+   avb_log(L_AVDECC, LOG_DEBUG, "done setting remote samplerate");
 
-   printf("Done setting samplerate.\n");
+   pthread_t control_thread_id;
+   pthread_create(&control_thread_id, NULL, avtp_message_handler, &sock);
 
+   avb_log(L_SYS, LOG_INFO, "own MAC %02x:%02x:%02x:%02x:%02x:%02x",
+           (uint8_t)mac.sa_data[0], (uint8_t)mac.sa_data[1], (uint8_t)mac.sa_data[2],
+           (uint8_t)mac.sa_data[3], (uint8_t)mac.sa_data[4], (uint8_t)mac.sa_data[5]);
 
-   if (sock >= 0)
-   {
-      pthread_t control_thread_id;
+   avdecc_acmp_connect(sock);
 
-      pthread_create(&control_thread_id, NULL, handle_22f0_msg, &sock);
+   static struct msrp_talker_ctx talker_ctx[MAX_STREAMS];
+   static struct msrp_listener_ctx listener_ctx[MAX_STREAMS];
 
-      printf("\nMac: %02x-%02x-%02x-%02x-%02x-%02x\n",
-          (uint8_t)mac.sa_data[0],
-          (uint8_t)mac.sa_data[1],
-          (uint8_t)mac.sa_data[2],
-          (uint8_t)mac.sa_data[3],
-          (uint8_t)mac.sa_data[4],
-          (uint8_t)mac.sa_data[5]);
+   for (int k = 0; k < g_num_streams; k++) {
+       uint8_t ox_stream[8], ox_mac[6];
+       uint64_to_array6(g_streams[k].dest_mac, ox_mac);
+       uint64_to_array8(g_streams[k].stream_id, ox_stream);
 
-      fdset[0].fd = sock;
-      fdset[0].events = POLLIN;
-      fdset[0].revents = 0;
+       talker_ctx[k].idx = k;
+       talker_ctx[k].pktsz = 32 + channels_per_stream * bytes_per_sample * samples_per_interval;
+       talker_ctx[k].interval = 1;
+       talker_ctx[k].latency = 95;
+       talker_ctx[k].vid = MSRP_CLASS_A_VLAN;
+       talker_ctx[k].priority = MSRP_CLASS_A_PRIORITY;
+       talker_ctx[k].last_ms = 0;
+       talker_ctx[k].attempts = 0;
+       memcpy(talker_ctx[k].ox_stream, ox_stream, 8);
+       memcpy(talker_ctx[k].ox_mac, ox_mac, 6);
+       msrp_talker_start(&talker_ctx[k]);
 
-      int i=1000;
+       uint8_t ix_stream[8], ix_mac[6];
+       uint64_t ix = msrp_listener_expected_stream_id(k);
+       uint64_to_array6(g_streams[k].peer_mac, ix_mac);
+       uint64_to_array8(ix, ix_stream);
 
-      // setup tx command
-
-      struct jdksavdecc_acmpdu cmd;
-
-      cmd.header.cd = 1;
-      cmd.header.subtype = JDKSAVDECC_SUBTYPE_ACMP;
-      cmd.header.sv = 0;
-      cmd.header.version = 0;
-      cmd.header.message_type = JDKSAVDECC_ACMP_MESSAGE_TYPE_CONNECT_TX_COMMAND;
-      cmd.header.status = JDKSAVDECC_ACMP_STATUS_SUCCESS;
-      cmd.header.control_data_length = 44;
-      cmd.header.stream_id = f_stream;
-
-      cmd.controller_entity_id = controller_guid;
-      cmd.talker_entity_id = remote_talker_guid;
-      cmd.listener_entity_id = entity_guid;
-      cmd.talker_unique_id = 0;
-      cmd.listener_unique_id = 0;
-      cmd.stream_dest_mac = f_mac;
-      cmd.connection_count = 0;
-      cmd.sequence_id = 1;
-      cmd.flags = 0;
-      cmd.stream_vlan_id = 0;
-      cmd.reserved = 0;
-
-      memcpy(buffer, DMAC, 6);
-      memcpy(&buffer[6], MAC, 6);
-      buffer[12] = 0x22; buffer[13] = 0xf0;
-
-      jdksavdecc_acmpdu_write(&cmd, buffer, 14, sizeof(buffer));
-
-      sendMsg(sock, buffer, 70);
-
-      cmd.header.cd = 1;
-      cmd.header.subtype = JDKSAVDECC_SUBTYPE_ACMP;
-      cmd.header.sv = 0;
-      cmd.header.version = 0;
-      cmd.header.message_type = JDKSAVDECC_ACMP_MESSAGE_TYPE_CONNECT_RX_COMMAND;
-      cmd.header.status = JDKSAVDECC_ACMP_STATUS_SUCCESS;
-      cmd.header.control_data_length = 44;
-      cmd.header.stream_id = f_stream;
-
-      cmd.controller_entity_id = controller_guid;
-      cmd.talker_entity_id = entity_guid;
-      cmd.listener_entity_id = remote_listener_guid;
-      cmd.talker_unique_id = 0;
-      cmd.listener_unique_id = 0;
-      cmd.stream_dest_mac = f_mac;
-      cmd.connection_count = 0;
-      cmd.sequence_id = 1;
-      cmd.flags = 0;
-      cmd.stream_vlan_id = 0;
-      cmd.reserved = 0;
-
-      memcpy(buffer, DMAC, 6);
-      memcpy(&buffer[6], MAC, 6);
-      buffer[12] = 0x22; buffer[13] = 0xf0;
-
-      jdksavdecc_acmpdu_write(&cmd, buffer, 14, sizeof(buffer));
-
-      sendMsg(sock, buffer, 70);
-
-      rc = send_ready(ix_stream);
-
-      printf("rc = %d, done sending ready\n", rc);
-
-      
-      rc = mrp_advertise_stream
-                    (ox_stream,
-		     ox_mac,
-                     32 +
-                     channels_per_stream *
-                     bytes_per_sample *
-                     samples_per_interval,
-                     1,
-                     95, 
-                     CLASS_A_VLAN, CLASS_A_PRIORITY);
-
-      printf("rc = %d, advertising stream\n", rc);
-
-      while (1) //poll(&fdset, 1, -1) > 0)
-      {
-         adpdu.available_index = ++global_available_index;
-         
-         memcpy(buffer, DMAC, 6);
-         memcpy(&buffer[6], MAC, 6);
-
-         buffer[12] = 0x22; buffer[13] = 0xf0;
-         jdksavdecc_adpdu_write(&adpdu, &buffer[14], 0, sizeof(buffer));
-
-         sendMsg(sock, buffer, 82);
-
-         sleep(5);
-
-      }
-      close(sock);
-
-      rc = mrp_unadvertise_stream
-                    (ox_stream,
-		     ox_mac,
-                     32 +
-                     channels_per_stream *
-                     bytes_per_sample *
-                     samples_per_interval,
-                     1,
-                     95, 
-                     CLASS_A_VLAN, CLASS_A_PRIORITY);
-
-      send_leave(ix_stream);
-
+       listener_ctx[k].idx = k;
+       listener_ctx[k].last_ms = 0;
+       listener_ctx[k].attempts = 0;
+       memcpy(listener_ctx[k].ix_stream, ix_stream, 8);
+       memcpy(listener_ctx[k].ix_mac, ix_mac, 6);
+       if (ix)
+           msrp_listener_start(&listener_ctx[k]);
    }
+
+   avb_log(L_AVTP, LOG_INFO, "kernel relay is the audio data plane");
+
+   status_init();
+   gptp_link_init(ifindex);
+
+   uint64_t last_adp = 0, last_render = 0, start_ms = get_time_in_ms();
+   uint64_t last_tx_ticks = 0, last_tx_ms = 0;
+   int was_locked = 0, was_synced = 0;
+   int last_kernel_synced = -1;
+   int last_bw_match = -2;
+   uint64_t was_gm = 0;
+
+   uint64_t msrp_reserved_bps = 0;
+   for (int k = 0; k < g_num_streams; k++)
+       msrp_reserved_bps += stream_reserved_bps(talker_ctx[k].pktsz, talker_ctx[k].interval);
+
+   while (running) {
+      uint64_t now = get_time_in_ms();
+
+      if (now - last_adp > 2000) {
+         avdecc_adp_send_announce(sock);
+         avdecc_adp_update_last_adp(now);
+         last_adp = now;
+      }
+
+        gptp_poll(&g_status, &g_status_lock, &was_locked, &was_synced, &was_gm);
+        gptp_link_poll(now);
+        {
+            int synced;
+            int64_t offset;
+            pthread_mutex_lock(&g_status_lock);
+            synced = g_status.gptp_synced;
+            offset = g_status.gptp_offset_ns;
+            pthread_mutex_unlock(&g_status_lock);
+            if (synced != last_kernel_synced) {
+                publish_sync_state_to_kernel(synced, offset);
+                last_kernel_synced = synced;
+            }
+        }
+        descriptor_update_clock_source();
+
+        acmp_tick(sock, now);
+        avdecc_peers_poll(sock, now);
+        avdecc_probe_poll(sock, now);
+        msrp_listener_follow(listener_ctx, g_num_streams);
+        publish_listener_identities_to_kernel();
+
+        for (int k = 0; k < g_num_streams; k++) {
+            msrp_talker_tick(&talker_ctx[k], &g_status, &g_status_lock);
+            msrp_listener_tick(&listener_ctx[k], &g_status, &g_status_lock);
+        }
+
+        unsigned long long cbs_bps = 0;
+        {
+            FILE *f = fopen("/proc/snd_igb_avb/tx_engine", "r");
+            if (f) {
+                char line[64];
+                int tx_timer_active = 0;
+                unsigned long long ticks = 0;
+                unsigned long long late_launch = 0;
+                unsigned long long xrun = 0;
+                unsigned long long gated_ticks = 0;
+                unsigned long long silence_packets = 0;
+                int gated = 1;
+                while (fgets(line, sizeof(line), f)) {
+                    int active;
+                    if (sscanf(line, "tx_timer_active=%d", &active) == 1)
+                        tx_timer_active = active;
+                    else if (sscanf(line, "tx_engine_ticks=%llu", &ticks) == 1)
+                        ;
+                    else if (sscanf(line, "tx_silence_packets=%llu", &silence_packets) == 1)
+                        ;
+                    else if (sscanf(line, "tx_late_launch=%llu", &late_launch) == 1)
+                        ;
+                    else if (sscanf(line, "tx_xrun=%llu", &xrun) == 1)
+                        ;
+                    else if (sscanf(line, "tx_gated=%d", &gated) == 1)
+                        ;
+                    else if (sscanf(line, "tx_gated_ticks=%llu", &gated_ticks) == 1)
+                        ;
+                    else if (sscanf(line, "aggregate_idleslope_bps=%llu", &cbs_bps) == 1)
+                        ;
+                }
+                fclose(f);
+                uint32_t ticks_per_s = 0;
+                int have_rate = last_tx_ms && now > last_tx_ms && ticks >= last_tx_ticks;
+                if (have_rate)
+                    ticks_per_s = (uint32_t)((ticks - last_tx_ticks) * 1000ULL /
+                                             (now - last_tx_ms));
+                {
+                    static struct avb_diag tx_stall;
+                    char body[160];
+                    snprintf(body, sizeof body,
+                             "AVTP talker: TX engine armed but launching no packets: "
+                             "restart the stack [%016llx]", (unsigned long long)ENTITY_ID);
+                    avb_diag_update(&tx_stall, have_rate && tx_timer_active && !gated && !ticks_per_s &&
+                                    gptp_link_carrier(),
+                                    now, 3000, body);
+                }
+                last_tx_ticks = ticks;
+                last_tx_ms = now;
+                status_update_tx_engine(tx_timer_active, ticks_per_s,
+                                        late_launch, xrun, gated, gated_ticks,
+                                        silence_packets);
+            }
+        }
+
+        {
+            int match = cbs_bps ? (cbs_bps == msrp_reserved_bps) : -1;
+
+            if (match != last_bw_match) {
+                if (match == 0)
+                    avb_log(L_SYS, LOG_WARNING, "reserved BW %llu != CBS idleSlope %llu bps",
+                            (unsigned long long)msrp_reserved_bps, cbs_bps);
+                else if (match == 1)
+                    avb_log(L_SYS, LOG_INFO, "reserved BW == CBS idleSlope (%llu bps, %d streams)",
+                            cbs_bps, g_num_streams);
+                last_bw_match = match;
+            }
+            status_update_cbs_bw(cbs_bps, msrp_reserved_bps, match);
+        }
+
+         {
+             static unsigned long long last_cap_frames;
+             FILE *f = fopen("/proc/snd_igb_avb/rx_engine", "r");
+
+             status_update_media_clk(descriptor_get_clock_source_index() ==
+                                     CLOCK_SOURCE_INDEX_INTERNAL);
+             if (f) {
+                 char line[192];
+                 long long drift = 0;
+                 int warn = 0;
+                 unsigned long long slips = 0, seq_err = 0, cap_frames = 0, unmatched = 0;
+                 int capture_running;
+
+                 while (fgets(line, sizeof(line), f)) {
+                     int k, ready;
+                     long long sliding;
+
+                     sscanf(line, "rx_media_drift_ppb=%lld", &drift);
+                     sscanf(line, "rx_drift_warn_ppb=%d", &warn);
+                     sscanf(line, "rx_clock_slips=%llu", &slips);
+                     sscanf(line, "rx_seq_errors=%llu", &seq_err);
+                     sscanf(line, "capture_frames_total=%llu", &cap_frames);
+                     sscanf(line, "rx_unmatched=%llu", &unmatched);
+                     if (sscanf(line, "stream[%d]: rx_pkts=%*u drift_ppb=%*d sliding_ppb=%lld window_ready=%d",
+                                &k, &sliding, &ready) == 3)
+                         status_update_rx_stream_clock(k, sliding, ready);
+                 }
+                 fclose(f);
+                 capture_running = cap_frames != last_cap_frames;
+                 last_cap_frames = cap_frames;
+                 status_update_rx_engine(1, drift, warn, slips, seq_err, unmatched, capture_running);
+             } else {
+                 status_update_rx_engine(0, 0, 0, 0, 0, 0, 0);
+                 for (int k = 0; k < g_num_streams; k++)
+                     status_update_rx_stream_clock(k, 0, 0);
+             }
+         }
+
+      if (now - last_render >= 500) {
+         status_update_filter_ids();
+         status_render(argv[1], start_ms);
+         last_render = now;
+      }
+
+      usleep(100 * 1000);
+   }
+
+   status_screen_teardown();
+   avb_log(L_SYS, LOG_INFO, "shutting down: ADP departing, leaving streams");
+
+   avdecc_adp_send_departing(sock);
+
+   /* join the control thread before closing the socket it reads from */
+   pthread_join(control_thread_id, NULL);
+   avtp_socket_close();
+
+   for (int k = 0; k < g_num_streams; k++) {
+       mrp_unadvertise_stream(talker_ctx[k].ox_stream, talker_ctx[k].ox_mac,
+                              talker_ctx[k].pktsz, talker_ctx[k].interval,
+                              talker_ctx[k].latency, talker_ctx[k].vid,
+                              talker_ctx[k].priority);
+   }
+   msrp_listener_leave_all(listener_ctx, g_num_streams);
+
+   msrp_listener_cleanup();
+   msrp_talker_cleanup();
+   msrp_domain_cleanup();
+   avdecc_adp_cleanup();
+   gptp_link_cleanup();
+   gptp_client_cleanup();
+   avb_log_close();
+
+   if (g_maap_ctx.count > 0) {
+       avb_log(L_SYS, LOG_INFO, "releasing MAAP block base=0x%012llx count=%u",
+               (unsigned long long)g_maap_ctx.base, g_maap_ctx.count);
+       maap_release_adresses(&g_maap_ctx);
+       g_maap_ctx.count = 0;
+   }
+
    return 0;
 }

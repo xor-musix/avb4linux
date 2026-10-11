@@ -33,18 +33,12 @@
 ******************************************************************************/
 
 #include "mrp_client.h"
-
-/* global variables */
+#include "avb_log.h"
 
 volatile int mrp_okay;
 volatile int mrp_error = 0;
 pthread_t monitor_thread;
 pthread_attr_t monitor_attr;
-
-
-/*
- * private
- */
 
 static int m_sock = -1;
 static talker_cb_t m_talker_cb = NULL;
@@ -87,10 +81,6 @@ int process_mrp_msg(char *buf, int buflen)
 	struct mrp_listener_ctx listener_ctx;
 	struct mrp_domain_ctx domain_ctx;
 
-	/*
-	 * 1st character indicates application
-	 * [MVS] - MAC, VLAN or STREAM
-	 */
 	int i=0, j=0, k=0, l=0;
         unsigned int id=0;
 	unsigned int substate=0;
@@ -98,74 +88,64 @@ int process_mrp_msg(char *buf, int buflen)
  next_line:if (k >= buflen)
 		return 0;
 
-    printf("%s\n", buf);
+	avb_log(L_MSRP, LOG_DEBUG, "mrpd: %s", buf);
 
 	switch (buf[k]) {
 	case 'E':
-		printf("%s from mrpd\n", buf);
-		fflush(stdout);
+		avb_log(L_MSRP, LOG_WARNING, "mrpd error response: %s", buf);
 		mrp_error = 1;
 		break;
 	case 'O':
 		mrp_okay = 1;
 		break;
 	case 'M':
+		avb_log(L_MSRP, LOG_DEBUG, "mrpd (unhandled): %s", buf);
+		break;
 	case 'V':
-		printf("%s unhandled from mrpd\n", buf);
-		fflush(stdout);
-
-		/* unhandled for now */
+		{
+			int vlan = 0;
+			sscanf(&(buf[k + 4]), "%d", &vlan);
+			avb_log(L_MSRP, LOG_DEBUG, "mrpd (MVRP VLAN) %s: vid=%d",
+				(buf[k + 1] == 'L') ? "leave" : "join", vlan);
+		}
 		break;
 	case 'L':
 
-		/* parse a listener attribute */
 		i = k;
 		while (buf[i] != 'D')
 			i++;
-		i += 2;		/* skip the ':' */
+		i += 2;
 		sscanf(&(buf[i]), "%d", &substate);
 		while (buf[i] != 'S')
 			i++;
-		i += 2;		/* skip the ':' */
+		i += 2;
 		for (j = 0; j < 8; j++) {
 			sscanf(&(buf[i + 2 * j]), "%02x", &id);
 			listener_ctx.stream_id[j] = (unsigned char)id;
-		} 
-                printf
-		    ("FOUND STREAM ID=%02x%02x%02x%02x%02x%02x%02x%02x ",
-		     (unsigned char)listener_ctx.stream_id[0], 
-                     (unsigned char)listener_ctx.stream_id[1],
-		     (unsigned char)listener_ctx.stream_id[2], 
-                     (unsigned char)listener_ctx.stream_id[3],
-		     (unsigned char)listener_ctx.stream_id[4], 
-                     (unsigned char)listener_ctx.stream_id[5],
-		     (unsigned char)listener_ctx.stream_id[6], 
-                     (unsigned char)listener_ctx.stream_id[7]);
+		}
 		while (buf[i] != 'R')
 			i++;
-		i += 2;		/* skip the ':' */
+		i += 2;
 		for (j = 0; j < 6; j++) {
 			sscanf(&(buf[i + 2 * j]), "%02x", &id);
 			listener_ctx.listener[j] = (unsigned char)id;
-		} 
-
-		switch (substate) {
-		case 0:
-			printf("with state ignore\n");
-			break;
-		case 1:
-			printf("with state askfailed\n");
-			break;
-		case 2:
-			printf("with state ready\n");
-			break;
-		case 3:
-			printf("with state readyfail\n");
-			break;
-		default:
-			printf("with state UNKNOWN (%d)\n", substate);
-			break;
 		}
+
+		avb_log(L_MSRP, LOG_INFO,
+			"listener declaration: stream %02x%02x%02x%02x%02x%02x%02x%02x state %s",
+			(unsigned char)listener_ctx.stream_id[0],
+			(unsigned char)listener_ctx.stream_id[1],
+			(unsigned char)listener_ctx.stream_id[2],
+			(unsigned char)listener_ctx.stream_id[3],
+			(unsigned char)listener_ctx.stream_id[4],
+			(unsigned char)listener_ctx.stream_id[5],
+			(unsigned char)listener_ctx.stream_id[6],
+			(unsigned char)listener_ctx.stream_id[7],
+			substate == 0 ? "ignore" :
+			substate == MSRP_LISTENER_ASKFAILED ? "askfailed" :
+			substate == MSRP_LISTENER_READY ? "ready" :
+			substate == 3 ? "readyfail" : "unknown");
+
 		if (substate == MSRP_LISTENER_READY)
 		{
                 	listener_ctx.mode = MRP_JOIN;
@@ -174,40 +154,15 @@ int process_mrp_msg(char *buf, int buflen)
 		{
 			listener_ctx.mode = MRP_LEAVE;
 		}
+		listener_ctx.substate = substate;
 
-		fflush(stdout);
 		m_listener_cb(listener_ctx);
 
-		/* try to find a newline ... */
 		while ((i < buflen) && (buf[i] != '\n') && (buf[i] != '\0'))
 			i++;
 		if (i == buflen)
 			return 0;
 		if (buf[i] == '\0')
-			return 0;
-		i++;
-		k = i;
-		goto next_line;
-		break;
-	case 'D':
-		i = k + 4;
-
-		/* save the domain attribute */
-		sscanf(&(buf[i]), "%d", &domain_ctx.id);
-		while (buf[i] != 'P')
-			i++;
-		i += 2;		/* skip the ':' */
-		sscanf(&(buf[i]), "%d", &domain_ctx.priority);
-		while (buf[i] != 'V')
-			i++;
-		i += 2;		/* skip the ':' */
-		sscanf(&(buf[i]), "%d", &domain_ctx.vid);
-
-		m_domain_cb(domain_ctx);
-
-		while ((i < buflen) && (buf[i] != '\n') && (buf[i] != '\0'))
-			i++;
-		if ((i == buflen) || (buf[i] == '\0'))
 			return 0;
 		i++;
 		k = i;
@@ -225,7 +180,7 @@ int process_mrp_msg(char *buf, int buflen)
 		{
 			talker_ctx.mode = MRP_LEAVE;
 		}
-		l = 6; /* skip "Sxx T:" */
+		l = 6;
 		while ((l < buflen) && ('S' != buf[l++]));
 		if (l == buflen)
 			return -1;
@@ -259,63 +214,34 @@ int process_mrp_msg(char *buf, int buflen)
 		break;
 	case 'S':
 
-		/* handle the leave/join events */
 		switch (buf[k + 4]) {
 		case 'L':
 			i = k + 5;
 			while (buf[i] != 'D')
 				i++;
-			i += 2;	/* skip the ':' */
+			i += 2;
 			sscanf(&(buf[i]), "%d", &substate);
 			while (buf[i] != 'S')
 				i++;
-			i += 2;	/* skip the ':' */
+			i += 2;
 			for (j = 0; j < 8; j++) {
 				sscanf(&(buf[i + 2 * j]), "%02x", &id);
 				listener_ctx.stream_id[j] = (unsigned char)id;
-			} printf
-			    ("EVENT on STREAM ID=%02x%02x%02x%02x%02x%02x%02x%02x ",
-			     (unsigned char)listener_ctx.stream_id[0], 
-                             (unsigned char)listener_ctx.stream_id[1],
-			     (unsigned char)listener_ctx.stream_id[2],
-                             (unsigned char)listener_ctx.stream_id[3],
-			     (unsigned char)listener_ctx.stream_id[4],
-                             (unsigned char)listener_ctx.stream_id[5],
-			     (unsigned char)listener_ctx.stream_id[6],
-                             (unsigned char)listener_ctx.stream_id[7]);
+			}
 			while (buf[i] != 'R')
 				i++;
-			i += 2;		/* skip the ':' */
+			i += 2;
 			for (j = 0; j < 6; j++) {
 				sscanf(&(buf[i + 2 * j]), "%02x", &id);
 				listener_ctx.listener[j] = (unsigned char)id;
-			} 
-			switch (substate) {
-			case 0:
-				printf("with state ignore\n");
-				break;
-			case 1:
-				printf("with state askfailed\n");
-				break;
-			case 2:
-				printf("with state ready\n");
-				break;
-			case 3:
-				printf("with state readyfail\n");
-				break;
-			default:
-				printf("with state UNKNOWN (%d)\n", substate);
-				break;
 			}
 			switch (buf[k + 1]) {
 			case 'L':
-				printf("got a leave indication\n");
                 	        listener_ctx.mode = MRP_JOIN;
 				break;
 			case 'J':
 			case 'N':
-				printf("got a new/join indication\n");
-				if (substate > MSRP_LISTENER_ASKFAILED) 
+				if (substate > MSRP_LISTENER_ASKFAILED)
 				{
 	                	        listener_ctx.mode = MRP_JOIN;
 				}
@@ -325,10 +251,26 @@ int process_mrp_msg(char *buf, int buflen)
 				}
 				break;
 			}
+			avb_log(L_MSRP, LOG_INFO,
+				"listener %s: stream %02x%02x%02x%02x%02x%02x%02x%02x state %s",
+				buf[k + 1] == 'L' ? "leave" : "new/join",
+				(unsigned char)listener_ctx.stream_id[0],
+				(unsigned char)listener_ctx.stream_id[1],
+				(unsigned char)listener_ctx.stream_id[2],
+				(unsigned char)listener_ctx.stream_id[3],
+				(unsigned char)listener_ctx.stream_id[4],
+				(unsigned char)listener_ctx.stream_id[5],
+				(unsigned char)listener_ctx.stream_id[6],
+				(unsigned char)listener_ctx.stream_id[7],
+				substate == 0 ? "ignore" :
+				substate == MSRP_LISTENER_ASKFAILED ? "askfailed" :
+				substate == MSRP_LISTENER_READY ? "ready" :
+				substate == 3 ? "readyfail" : "unknown");
+			listener_ctx.substate = substate;
 			m_listener_cb(listener_ctx);
 			break;
 		case 'T':
-			i = k + 4; /* skip "Sxx T:" */
+			i = k + 4;
 
 			if (strncmp(buf, "SNE T:", 6) == 0 || strncmp(buf, "SJO T:", 6) == 0)
 			{
@@ -359,6 +301,21 @@ int process_mrp_msg(char *buf, int buflen)
 
 			m_talker_cb(talker_ctx);
                         break;
+		case 'D':
+			i = k + 5;
+			while ((i < buflen) && buf[i] != 'C') i++;
+			if (i < buflen) { i += 2; sscanf(&buf[i], "%d", &domain_ctx.id); }
+			while ((i < buflen) && buf[i] != 'P') i++;
+			if (i < buflen) { i += 2; sscanf(&buf[i], "%d", &domain_ctx.priority); }
+			while ((i < buflen) && buf[i] != 'V') i++;
+			if (i < buflen) { i += 2; sscanf(&buf[i], "%d", &domain_ctx.vid); }
+			domain_ctx.mode = (buf[k + 1] == 'L') ? MRP_LEAVE : MRP_JOIN;
+			avb_log(L_MSRP, LOG_DEBUG, "domain %s: class %d prio %d vid %d",
+				domain_ctx.mode == MRP_LEAVE ? "leave" : "join",
+				domain_ctx.id, domain_ctx.priority, domain_ctx.vid);
+			if (m_domain_cb)
+				m_domain_cb(domain_ctx);
+			break;
 		}
 		while ((i < buflen) && (buf[i] != '\n') && (buf[i] != '\0'))
 			i++;
@@ -420,10 +377,6 @@ void *mrp_monitor_thread(void *arg)
 	pthread_exit(NULL);
 }
 
-/*
- * public
- */
-
 int mrp_connect(int *halt_tx)
 {
 	struct sockaddr_in addr;
@@ -439,7 +392,7 @@ int mrp_connect(int *halt_tx)
 
 	if(0 > (bind(m_sock_fd, (struct sockaddr*)&addr, sizeof(addr))))
 	{
-		fprintf(stderr, "Could not bind m_socket.\n");
+		avb_log(L_MSRP, LOG_ERR, "could not bind mrpd control socket");
 		close(m_sock);
 		return -1;
 	}
@@ -626,7 +579,7 @@ int send_ready(uint8_t *stream_id)
 		     stream_id[4], stream_id[5],
 		     stream_id[6], stream_id[7]);
 
-        printf("%s\n",databuf);
+	avb_log(L_MSRP, LOG_DEBUG, "send listener ready: %s", databuf);
 	rc = send_mrp_msg(databuf, 1500);
 
 	free(databuf);
@@ -660,7 +613,6 @@ int send_leave(uint8_t *stream_id)
 		return 0;
 }
 
-// TODO remove
 int recv_mrp_okay()
 {
 	while ((mrp_okay == 0) && (mrp_error == 0))

@@ -1,0 +1,3 @@
+# N=16, 128ch, 16A only, 1:1 (regression; SW demux, one talker filter)
+# our-streams  host   device-streams
+0-15           16a    0-15

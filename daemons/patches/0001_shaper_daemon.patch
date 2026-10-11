@@ -1,0 +1,103 @@
+--- a/daemons/shaper/src/shaper_daemon.c
++++ b/daemons/shaper/src/shaper_daemon.c
+@@ -81,26 +81,22 @@
+ char interface[IFNAMSIZ] = {0};
+ int bandwidth = 0;
+ int classa_parent = 2, classb_parent=3;
+-int exit_received = 0;
++volatile sig_atomic_t exit_received = 0;
++static int exit_pipe_wr = -1;
+ 
+ static void signal_handler(int signal)
+ {
+ 	if (signal == SIGINT || signal == SIGTERM) {
+-		if (!exit_received) {
+-			SHAPER_LOG_INFO("Shutdown signal received");
+-			exit_received = 1;
++		if (exit_received) {
++			_exit(2);
++		}
++		exit_received = 1;
++		/* No logging in a signal handler: it is not async-signal-safe. */
++		if (exit_pipe_wr >= 0) {
++			ssize_t rc = write(exit_pipe_wr, "x", 1);
++			(void) rc;
+ 		}
+-		else {
+-			// Force shutdown
+-			exit(2);
+-		}
+-	}
+-	else if (signal == SIGUSR1) {
+-		SHAPER_LOG_DEBUG("Waking up streaming thread");
+-	}
+-	else {
+-		SHAPER_LOG_ERROR("Unexpected signal");
+ 	}
+ }
+ 
+ void log_client_error_message(int sockfd, const char *fmt, ...)
+@@ -758,8 +754,6 @@
+ 	int fdmax;
+ 	int recvbytes;
+ 
+-	shaperLogInit();
+-
+ 	while((c = getopt(argc,argv,"d"))>=0)
+ 	{
+ 		switch(c)
+@@ -772,17 +766,30 @@
+ 
+ 	if (daemonize == 1 && daemon(1,0) < 0)
+ 	{
+-		SHAPER_LOGF_ERROR("Error %d (%s) starting the daemon", errno, strerror(errno));
+-		shaperLogExit();
++		fprintf(stderr, "Error %d (%s) starting the daemon\n", errno, strerror(errno));
+ 		return 1;
+ 	}
+ 
++	// Must follow daemon(): fork() does not carry the logging thread over.
++	shaperLogInit();
++
+ 	if ((socketfd = init_socket())<0)
+ 	{
+ 		shaperLogExit();
+ 		return 1;
+ 	}
+ 
++	int exit_pipe[2];
++	if (pipe(exit_pipe) < 0)
++	{
++		SHAPER_LOGF_ERROR("Failed to create shutdown pipe: %s", strerror(errno));
++		shaperLogExit();
++		return 1;
++	}
++	fcntl(exit_pipe[0], F_SETFL, O_NONBLOCK);
++	fcntl(exit_pipe[1], F_SETFL, O_NONBLOCK);
++	exit_pipe_wr = exit_pipe[1];
++
+ 	// Setup signal handler
+ 	// We catch SIGINT and shutdown cleanly
+ 	int err;
+@@ -832,7 +839,8 @@
+ 			FD_SET(STDIN_FILENO, &read_fds);
+ 		}
+ 		FD_SET(socketfd, &read_fds);
+-		fdmax = socketfd;
++		FD_SET(exit_pipe[0], &read_fds);
++		fdmax = socketfd > exit_pipe[0] ? socketfd : exit_pipe[0];
+ 		for (i = 0; i < MAX_CLIENT_CONNECTIONS; ++i)
+ 		{
+ 			if (clientfd[i] > 0)
+@@ -845,6 +853,11 @@
+ 			}
+ 		}
+ 		int n = select(fdmax+1, &read_fds, NULL, NULL, NULL);
++		if (exit_received)
++		{
++			process_command(-1, "-q");
++			break;
++		}
+ 		if(n == -1)
+ 		{
+ 			if (exit_received)

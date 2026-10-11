@@ -1,0 +1,30 @@
+diff --git a/pcap-linux.c b/pcap-linux.c
+index 17bd0f56..ec5bf288 100644
+--- a/pcap-linux.c
++++ b/pcap-linux.c
+@@ -1723,15 +1723,20 @@ pcap_read_packet(pcap_t *handle, pcap_handler callback, u_char *userdata)
+ 					"SIOCGSTAMPNS: %s", pcap_strerror(errno));
+ 			return PCAP_ERROR;
+ 		}
+-        } else
++	} else
+ #endif
+ 	{
+ 		if (ioctl(handle->fd, SIOCGSTAMP, &pcap_header.ts) == -1) {
+-			snprintf(handle->errbuf, PCAP_ERRBUF_SIZE,
+-					"SIOCGSTAMP: %s", pcap_strerror(errno));
+-			return PCAP_ERROR;
++			struct timeval tv;
++			if (gettimeofday(&tv, NULL) == 0) {
++				pcap_header.ts = tv;
++			} else {
++				snprintf(handle->errbuf, PCAP_ERRBUF_SIZE,
++						"SIOCGSTAMP/gettimeofday: %s", pcap_strerror(errno));
++				return PCAP_ERROR;
++			}
+ 		}
+-        }
++	}
+ 
+ 	pcap_header.caplen	= caplen;
+ 	pcap_header.len		= packet_len;

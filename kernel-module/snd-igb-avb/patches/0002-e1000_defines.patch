@@ -1,0 +1,10 @@
+--- a/e1000_defines.h	2026-10-10 00:38:44.255811076 +0200
++++ b/e1000_defines.h	2026-10-10 00:42:13.696401318 +0200
+@@ -46,6 +46,7 @@
+ #define E1000_WUFC_ARP	0x00000020 /* ARP Request Packet Wakeup Enable */
+ #define E1000_WUFC_IPV4	0x00000040 /* Directed IPv4 Packet Wakeup Enable */
+ #define E1000_WUFC_FLX0		0x00010000 /* Flexible Filter 0 Enable */
++#define E1000_WUFC_FLEX_HQ	0x00004000
+ 
+ /* Wake Up Status */
+ #define E1000_WUS_LNKC		E1000_WUFC_LNKC

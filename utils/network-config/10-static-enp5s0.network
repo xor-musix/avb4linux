@@ -1,0 +1,30 @@
+[Match]
+Name=enp5s0
+
+[Network]
+# ============================================
+# AVB-ONLY INTERFACE (enp5s0)
+# ============================================
+# This interface is for AVB traffic only (gPTP, SRP, 1722 streams)
+# NO gateway or DNS configured - prevents routing through this interface
+#
+# ⚠️ ADJUST THESE VALUES FOR YOUR NETWORK:
+# - Address: Choose an IP in your subnet (e.g., 192.168.1.101/24)
+# - Must be in same subnet as eno1
+# - Must not conflict with other devices
+Address=192.168.1.101/24
+
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+LLDP=no
+EmitLLDP=no
+
+# AVB traffic only - NO gateway, NO DNS
+# This prevents routing through enp5s0
+
+# Disable DHCP
+[DHCPv4]
+dhcp=none
+
+[DHCPv6]
+dhcp=none

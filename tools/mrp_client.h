@@ -35,10 +35,6 @@
 #ifndef _TALKER_MRP_CLIENT_H_
 #define _TALKER_MRP_CLIENT_H_
 
-/*
- * simple_talker MRP client part
- */
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -51,15 +47,13 @@
 #include <pthread.h>
 #include <poll.h>
 
-/* global defines */
-
 #define MRPD_PORT_DEFAULT 7500
 #define MAX_MRPD_CMDSZ (1500)
 #define MSRP_LISTENER_ASKFAILED 1
 #define MSRP_LISTENER_READY 2
 
 #define MRP_JOIN 0
-#define MRP_LEAVE 0
+#define MRP_LEAVE 1
 
 struct mrp_talker_ctx
 {
@@ -71,14 +65,12 @@ struct mrp_talker_ctx
 
 typedef void (*talker_cb_t)(const struct mrp_talker_ctx);
 
-#define MRP_JOIN 0
-#define MRP_LEAVE 0
-
 struct mrp_listener_ctx
 {
 	int mode;
         char stream_id[8];
         char listener[6];
+        int substate;
 };
 
 typedef void (*listener_cb_t)(const struct mrp_listener_ctx);
@@ -102,11 +94,8 @@ struct mrp_domain_attr
 
 extern volatile int mrp_error;
 
-/* functions */
-
-// from talker
 int send_mrp_msg(char *notify_data, int notify_len);
-int mrp_connect();
+int mrp_connect(int *halt_tx);
 int mrp_disconnect();
 int mrp_register_domain(struct mrp_domain_attr *reg_class);
 int mrp_join_vlan(struct mrp_domain_attr *reg_class);
@@ -115,15 +104,13 @@ int mrp_advertise_stream(uint8_t * streamid, uint8_t * destaddr,
 int mrp_unadvertise_stream(uint8_t * streamid, uint8_t * destaddr, 
                            int pktsz, int interval, int latency, int vid, int priority);
 
-// from listener
 int report_domain_status(struct mrp_domain_attr *class_a);
 
 int send_ready(uint8_t *stream_id);
 int send_leave(uint8_t *stream_id);
 
-// all
 int mrp_client_init(talker_cb_t talker_cb,
                     listener_cb_t listener_cb,
                     domain_cb_t domain_cb);
 
-#endif /* _TALKER_MRP_CLIENT_H_ */
+#endif

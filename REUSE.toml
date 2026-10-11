@@ -1,0 +1,125 @@
+version = 1
+
+[[annotations]]
+path = [
+    ".gitignore",
+    "REUSE.toml",
+    "daemons/*.txt",
+    "tests/.gitignore",
+    "tests/**/.gitignore",
+    "tests/**/*.md",
+    "tests/**/*.txt",
+    "tests/motu/topologies/*.topo",
+    "utils/network-config/*.network",
+    "utils/network-config/*.md",
+]
+SPDX-FileCopyrightText = "2026 mnemonic powerplay <mnemonic@xor-musix.de>"
+SPDX-License-Identifier = "BSD-2-Clause"
+
+[[annotations]]
+path = [
+    "kernel-module/snd-igb-avb/KNOWN_ISSUES.md",
+    "kernel-module/snd-igb-avb/warning-baseline.txt",
+]
+SPDX-FileCopyrightText = "2026 mnemonic powerplay <mnemonic@xor-musix.de>"
+SPDX-License-Identifier = "GPL-2.0-only"
+
+[[annotations]]
+path = ["README.md", ".gitmodules", "tools/Makefile"]
+SPDX-FileCopyrightText = [
+    "2019 Ralf Beck",
+    "2026 mnemonic powerplay <mnemonic@xor-musix.de>",
+]
+SPDX-License-Identifier = "BSD-2-Clause"
+
+# Ralf Beck's BSD-2-Clause headers carry the copyright notices; this adds the
+# license identifier.
+[[annotations]]
+path = [
+    "tools/avb-user.c",
+    "tools/avb_status.c",
+    "tools/avdecc_acmp.c",
+    "tools/avdecc_acmp.h",
+    "tools/avdecc_adp.c",
+    "tools/avdecc_adp.h",
+    "tools/avdecc_aecp.c",
+    "tools/avdecc_aecp.h",
+    "tools/avpdu.c",
+    "tools/avpdu.h",
+    "tools/avtp.c",
+    "tools/avtp.h",
+    "tools/descriptor.c",
+    "tools/descriptor.h",
+]
+precedence = "aggregate"
+SPDX-License-Identifier = "BSD-2-Clause"
+
+# Intel/Parrot BSD-3-Clause code from OpenAvnu, modified by Ralf Beck and us.
+[[annotations]]
+path = ["tools/mrp_client.c", "tools/maap_client.c"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = [
+    "2019 Ralf Beck",
+    "2026 mnemonic powerplay <mnemonic@xor-musix.de>",
+]
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = ["tools/mrp_client.h", "tools/maap_client.h"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2019 Ralf Beck"
+SPDX-License-Identifier = "BSD-3-Clause"
+
+# Harman International, from OpenAvnu.
+[[annotations]]
+path = "tools/maap_iface.h"
+precedence = "aggregate"
+SPDX-License-Identifier = "BSD-2-Clause"
+
+# Ralf Beck's kernel-side AVTP/ALSA glue (no copyright line in the file).
+[[annotations]]
+path = [
+    "kernel-module/snd-igb-avb/src/alsa.h",
+    "kernel-module/snd-igb-avb/src/avpdu.c",
+    "kernel-module/snd-igb-avb/src/avpdu.h",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = [
+    "2019 Ralf Beck",
+    "2026 mnemonic powerplay <mnemonic@xor-musix.de>",
+]
+SPDX-License-Identifier = "GPL-2.0-only"
+
+# Patches against the igb_avb driver: Intel's code as modified by Ralf Beck and us.
+[[annotations]]
+path = "kernel-module/snd-igb-avb/patches/*.patch"
+SPDX-FileCopyrightText = [
+    "2007-2016 Intel Corporation",
+    "2019 Ralf Beck",
+    "2026 mnemonic powerplay <mnemonic@xor-musix.de>",
+]
+SPDX-License-Identifier = "GPL-2.0-only"
+
+[[annotations]]
+path = "daemons/patches/0001_shaper_daemon.patch"
+SPDX-FileCopyrightText = [
+    "2016-2017 Harman International Industries, Incorporated",
+    "2026 mnemonic powerplay <mnemonic@xor-musix.de>",
+]
+SPDX-License-Identifier = "BSD-2-Clause"
+
+[[annotations]]
+path = "daemons/gptp-patches/*.patch"
+SPDX-FileCopyrightText = [
+    "2018 Intel Corporation",
+    "2026 mnemonic powerplay <mnemonic@xor-musix.de>",
+]
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = "utils/patches/libpcap-*.patch"
+SPDX-FileCopyrightText = [
+    "The Tcpdump Group",
+    "2026 mnemonic powerplay <mnemonic@xor-musix.de>",
+]
+SPDX-License-Identifier = "BSD-3-Clause"

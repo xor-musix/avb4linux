@@ -1,0 +1,39 @@
+--- a/e1000_hw.h	2026-10-10 00:38:44.255869493 +0200
++++ b/e1000_hw.h	2026-10-10 00:42:13.728317344 +0200
+@@ -31,6 +31,24 @@
+ 
+ struct e1000_hw;
+ 
++u32 igb_rd32(struct e1000_hw *hw, u32 reg);
++
++#define wr32(reg, val) \
++do { \
++	u8 __iomem *hw_addr = READ_ONCE((hw)->hw_addr); \
++	if (!E1000_REMOVED(hw_addr)) \
++		writel((val), &hw_addr[(reg)]); \
++} while (0)
++
++#define rd32(reg) (igb_rd32(hw, reg))
++
++#define wrfl() ((void)rd32(E1000_STATUS))
++
++#define array_wr32(reg, offset, value) \
++	wr32((reg) + ((offset) << 2), (value))
++
++#define array_rd32(reg, offset) (igb_rd32(hw, reg + ((offset) << 2)))
++
+ #define E1000_DEV_ID_82576			0x10C9
+ #define E1000_DEV_ID_82576_FIBER		0x10E6
+ #define E1000_DEV_ID_82576_SERDES		0x10E7
+@@ -742,9 +760,10 @@
+ 	bool module_plugged;
+ 	bool clear_semaphore_once;
+ 	u32 mtu;
+-	struct sfp_e1000_flags eth_flags;
++        struct e1000_sfp_flags eth_flags;
+ 	u8 media_port;
+ 	bool media_changed;
++	bool mas_capable;
+ };
+ 
+ struct e1000_dev_spec_vf {

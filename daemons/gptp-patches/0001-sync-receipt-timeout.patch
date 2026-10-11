@@ -1,0 +1,13 @@
+diff --git a/common/common_port.hpp b/common/common_port.hpp
+index 0554084..14ff949 100644
+--- a/common/common_port.hpp
++++ b/common/common_port.hpp
+@@ -45,7 +45,7 @@
+ 
+ #include <math.h>
+ 
+-#define SYNC_RECEIPT_TIMEOUT_MULTIPLIER 3 /*!< Sync rcpt timeout multiplier */
++#define SYNC_RECEIPT_TIMEOUT_MULTIPLIER 10 /*!< Sync rcpt timeout multiplier */
+ #define ANNOUNCE_RECEIPT_TIMEOUT_MULTIPLIER 3 /*!< Annc rcpt timeout mult */
+ #define LOG2_INTERVAL_INVALID -127 /* Invalid Log base 2 interval value */
+ 

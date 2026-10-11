@@ -1,0 +1,11 @@
+# N=31, 248ch: the most this setup can loop back -- every AVB input stream of
+# every device, one each (16A 16, 24Ai 4, 242Ai 4, 828ES 4, UltraLite 3).  The
+# 24Ai/242Ai have 8 output streams but only 4 inputs, so a 32nd stream could be
+# received (their outputs 4-7) but not looped back.  248k pps RX + TX, ~528 Mbps
+# reserved per direction on our port.  16A first, as in n24, so it needs no writes.
+# our-streams  host   device-streams
+0-15           16a    0-15
+16-19          24ai   0-3
+20-23          242ai  0-3
+24-27          828es  0-3
+28-30          ulavb  0-2

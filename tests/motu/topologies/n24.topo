@@ -1,0 +1,6 @@
+# N=24, 192ch: 192k pps RX + TX.  A 24Ai has only 4 AVB input streams, so it
+# loops back only 4 unique streams of ours.
+# our-streams  host   device-streams
+0-15           16a    0-15
+16-19          24ai   0-3
+20-23          242ai  0-3

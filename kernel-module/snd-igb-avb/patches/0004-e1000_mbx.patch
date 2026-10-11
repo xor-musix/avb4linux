@@ -1,0 +1,12 @@
+diff -ruN a/e1000_mbx.c b/e1000_mbx.c
+--- a/e1000_mbx.c	2026-06-04 22:35:35.938740215 +0200
++++ b/e1000_mbx.c	2026-06-04 22:35:35.940711316 +0200
+@@ -516,7 +516,6 @@
+ 		mbx->stats.reqs = 0;
+ 		mbx->stats.acks = 0;
+ 		mbx->stats.rsts = 0;
+-		fallthrough;
+ 	default:
+ 		return E1000_SUCCESS;
+ 	}
+

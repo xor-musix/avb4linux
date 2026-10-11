@@ -1,0 +1,35 @@
+[Match]
+Name=eno1
+
+[Network]
+# ============================================
+# NON-AVB INTERFACE (eno1)
+# ============================================
+# This interface handles all non-AVB traffic:
+# - Internet access
+# - LAN communication
+# - Web Controller access
+# - Firmware updates
+#
+# ⚠️ ADJUST THESE VALUES FOR YOUR NETWORK:
+# - Address: Choose an IP in your subnet (e.g., 192.168.1.100/24)
+# - Gateway: Your router/gateway IP (usually .1 or .254)
+# - DNS: Your DNS server (usually same as gateway)
+# - Must be in same subnet as enp5s0
+Address=192.168.1.100/24
+Gateway=192.168.1.1
+DNS=192.168.1.1
+
+IPv6AcceptRA=yes
+LinkLocalAddressing=no
+LLDP=no
+EmitLLDP=no
+
+# Enable DHCP for additional flexibility (optional)
+[DHCPv4]
+dhcp=yes
+send-hostname=yes
+send-release=yes
+
+[DHCPv6]
+dhcp=no

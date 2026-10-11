@@ -1,0 +1,4 @@
+# N=7, 56ch: two talker devices at once, uid != k (HW per-stream filters, N <= 8)
+# our-streams  host   device-streams
+0-3            828es  0-3
+4-6            ulavb  0-2

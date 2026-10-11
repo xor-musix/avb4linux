@@ -1,0 +1,94 @@
+# 32 Talkers (256-channel) Baseline Metrics
+#
+# These are the expected validation thresholds for the 32 talkers scale test.
+# Run time: 2025-06-15 on HP Z840 workstation (Intel Xeon E5-2630 v3 @ 2.40GHz)
+#
+# Format: key = value
+#
+# Audio Quality Metrics
+# ---------------------
+# All channels should meet these thresholds when playing 256-channel stimulus
+# at 48kHz with 32 talker streams (8 channels per stream).
+
+# Frequency accuracy (Hz)
+# The measured center frequency must be within this tolerance of the expected
+# tone frequency for each channel.
+freq_tolerance_hz = 3.0
+
+# Crosstalk (dB)
+# Worst foreign tone must be this far down from the target tone on each channel.
+# Negative value means "at least this much attenuation".
+crosstalk_max_db = -30.0
+
+# Amplitude range (dBFS)
+# Absolute band when no baseline is supplied. The per-channel sine level should
+# be within this range.
+amp_sanity_lo_dbfs = -30.0
+amp_sanity_hi_dbfs = 0.0
+
+# Noise floor (dBFS)
+# Residual (non-tone) energy must be this far down from the target tone.
+noise_floor_db = -40.0
+
+# Glitch budget (count)
+# Total glitch budget across all channels. Glitches are dropouts/packet losses
+# detected via sample prediction error.
+glitch_budget = 16
+
+# Tick Budget
+# -------------------
+# The de-interleave cost per tick must stay within this budget to ensure
+# real-time performance. 125 µs = one Class A measurement interval.
+tick_budget_us = 125.0
+
+# Maximum acceptable tick cost (measured at 256ch, 48kHz, scalar path)
+# This is the actual measured value from baseline runs.
+max_tick_cost_us = 15.0
+
+# XRUN Threshold
+# --------------
+# Maximum acceptable TX XRUN count during a 10-minute playback test.
+max_xrun_count = 0
+
+# Stream Configuration
+# --------------------
+# Number of AVB talker streams
+num_streams = 32
+
+# Channels per stream (fixed by AVB specification)
+channels_per_stream = 8
+
+# Total channels (num_streams * channels_per_stream)
+total_channels = 256
+
+# Audio Parameters
+# ----------------
+# Sample rate for the validation test
+sample_rate = 48000
+
+# Tone configuration (for stimulus generation)
+# Base frequency for channel 0 (Hz)
+tone_base_freq = 660.0
+
+# Frequency step per channel (Hz)
+# 90 Hz spacing keeps channel 255 at 23.610 kHz, below 24 kHz Nyquist
+tone_step_freq = 90.0
+
+# Per-channel tone level (dBFS)
+tone_level_dbfs = -6.0
+
+# Test Duration
+# -------------
+# Minimum playback duration for validation (seconds)
+min_test_duration = 600
+
+# PCAP Validation
+# ---------------
+# Expected packet count per tick (one per stream)
+pkts_per_tick = 32
+
+# Expected stream IDs in capture (32 distinct values)
+num_streams_in_pcap = 32
+
+# Expected cadence (Class A interval)
+cadence_us = 125

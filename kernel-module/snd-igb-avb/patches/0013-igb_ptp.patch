@@ -1,0 +1,251 @@
+--- a/igb_ptp.c	2026-10-10 00:38:44.255538757 +0200
++++ b/igb_ptp.c	2026-10-10 00:43:59.505037228 +0200
+@@ -38,6 +38,7 @@
+ 
+ #define INCVALUE_MASK		0x7fffffff
+ #define ISGN			0x80000000
++#define IGB_82580_BASE_PERIOD		0x800000000
+ 
+ /*
+  * The 82580 timesync updates the system timer every 8ns by 8ns,
+@@ -93,10 +94,10 @@
+  * SYSTIM read access for the 82576
+  */
+ 
+-#ifdef HAVE_CYCLECOUNTER_PARAM_CONST
+-static cycle_t igb_ptp_read_82576(const struct cyclecounter *cc)
+-#else
++#ifdef HAVE_CYCLECOUNTER_READ_NONCONST
+ static u64 igb_ptp_read_82576(struct cyclecounter *cc)
++#else
++static cycle_t igb_ptp_read_82576(const struct cyclecounter *cc)
+ #endif
+ {
+ 	struct igb_adapter *igb = container_of(cc, struct igb_adapter, cc);
+@@ -117,10 +118,10 @@
+  * SYSTIM read access for the 82580
+  */
+ 
+-#ifdef HAVE_CYCLECOUNTER_PARAM_CONST
+-static cycle_t igb_ptp_read_82580(const struct cyclecounter *cc)
+-#else
++#ifdef HAVE_CYCLECOUNTER_READ_NONCONST
+ static u64 igb_ptp_read_82580(struct cyclecounter *cc)
++#else
++static cycle_t igb_ptp_read_82580(const struct cyclecounter *cc)
+ #endif
+ {
+ 	struct igb_adapter *igb = container_of(cc, struct igb_adapter, cc);
+@@ -146,8 +147,8 @@
+  * SYSTIM read access for I210/I211
+  */
+ 
+-static void igb_ptp_read_i210(struct igb_adapter *adapter,
+-			      struct timespec64 *ts)
++void igb_ptp_read_i210(struct igb_adapter *adapter,
++                       struct timespec64 *ts)
+ {
+ 	struct e1000_hw *hw = &adapter->hw;
+ 	u32 sec, nsec;
+@@ -231,7 +232,40 @@
+  * PTP clock operations
+  */
+ 
+-#ifdef HAVE_PTP_ADJFREQ
++static int igb_ptp_adjfine_82576(struct ptp_clock_info *ptp, long scaled_ppm)
++{
++	struct igb_adapter *igb = container_of(ptp, struct igb_adapter,
++					       ptp_caps);
++	struct e1000_hw *hw = &igb->hw;
++	u64 incvalue;
++
++	incvalue = adjust_by_scaled_ppm(INCVALUE_82576, scaled_ppm);
++
++	wr32(E1000_TIMINCA, INCPERIOD_82576 | (incvalue & INCVALUE_82576_MASK));
++
++	return 0;
++}
++
++static int igb_ptp_adjfine_82580(struct ptp_clock_info *ptp, long scaled_ppm)
++{
++	struct igb_adapter *igb = container_of(ptp, struct igb_adapter,
++					       ptp_caps);
++	struct e1000_hw *hw = &igb->hw;
++	bool neg_adj;
++	u64 rate;
++	u32 inca;
++
++	neg_adj = diff_by_scaled_ppm(IGB_82580_BASE_PERIOD, scaled_ppm, &rate);
++
++	inca = rate & INCVALUE_MASK;
++	if (neg_adj)
++		inca |= ISGN;
++
++	wr32(E1000_TIMINCA, inca);
++
++	return 0;
++}
++
+ static int igb_ptp_adjfreq_82576(struct ptp_clock_info *ptp, s32 ppb)
+ {
+ 	struct igb_adapter *igb = container_of(ptp, struct igb_adapter,
+@@ -300,48 +334,6 @@
+ 
+ 	return 0;
+ }
+-#else
+-static int igb_ptp_adjfine_82576(struct ptp_clock_info *ptp, long scaled_ppm)
+-{
+-	struct igb_adapter *igb = container_of(ptp, struct igb_adapter,
+-	                                       ptp_caps);
+-	struct e1000_hw *hw = &igb->hw;
+-	u64 incvalue;
+-
+-	incvalue = adjust_by_scaled_ppm(INCVALUE_82576, scaled_ppm);
+-
+-	E1000_WRITE_REG(hw, E1000_TIMINCA, INCPERIOD_82576
+-			| (incvalue & INCVALUE_82576_MASK));
+-
+-	return 0;
+-}
+-
+-static int igb_ptp_adjfine_82580(struct ptp_clock_info *ptp, long scaled_ppm)
+-{
+-	struct igb_adapter *igb = container_of(ptp, struct igb_adapter,
+-	                                       ptp_caps);
+-	struct e1000_hw *hw = &igb->hw;
+-	int neg_adj = 0;
+-	u64 rate;
+-	u32 inca;
+-
+-	if (scaled_ppm < 0) {
+-		neg_adj = 1;
+-		scaled_ppm = -scaled_ppm;
+-	}
+-	rate = scaled_ppm;
+-	rate <<= 13;
+-	rate = div_u64(rate, 15625);
+-
+-	inca = rate & INCVALUE_MASK;
+-	if (neg_adj)
+-		inca |= ISGN;
+-
+-	E1000_WRITE_REG(hw, E1000_TIMINCA, inca);
+-
+-	return 0;
+-}
+-#endif /* HAVE_PTP_ADJFREQ */
+ 
+ static int igb_ptp_adjtime_82576(struct ptp_clock_info *ptp, s64 delta)
+ {
+@@ -1064,7 +1056,7 @@
+ 			config->rx_filter = HWTSTAMP_FILTER_ALL;
+ 			break;
+ 		}
+-		fallthrough;
++		/* fall through */
+ 	default:
+ 		config->rx_filter = HWTSTAMP_FILTER_NONE;
+ 		return -ERANGE;
+@@ -1178,6 +1170,43 @@
+ 		-EFAULT : 0;
+ }
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,6,0)
++int igb_ptp_hwtstamp_get(struct net_device *netdev,
++			 struct kernel_hwtstamp_config *config)
++{
++	struct igb_adapter *adapter = netdev_priv(netdev);
++
++	config->flags = adapter->tstamp_config.flags;
++	config->tx_type = adapter->tstamp_config.tx_type;
++	config->rx_filter = adapter->tstamp_config.rx_filter;
++
++	return 0;
++}
++
++int igb_ptp_hwtstamp_set(struct net_device *netdev,
++			 struct kernel_hwtstamp_config *config,
++			 struct netlink_ext_ack *extack)
++{
++	struct igb_adapter *adapter = netdev_priv(netdev);
++	struct hwtstamp_config cfg;
++	int err;
++
++	cfg.flags = config->flags;
++	cfg.tx_type = config->tx_type;
++	cfg.rx_filter = config->rx_filter;
++
++	err = igb_ptp_set_timestamp_mode(adapter, &cfg);
++	if (err)
++		return err;
++
++	memcpy(&adapter->tstamp_config, &cfg, sizeof(adapter->tstamp_config));
++
++	config->rx_filter = cfg.rx_filter;
++
++	return 0;
++}
++#endif
++
+ void igb_ptp_init(struct igb_adapter *adapter)
+ {
+ 	struct e1000_hw *hw = &adapter->hw;
+@@ -1193,11 +1222,7 @@
+ 		adapter->ptp_caps.max_adj = 999999881;
+ 		adapter->ptp_caps.n_ext_ts = 0;
+ 		adapter->ptp_caps.pps = 0;
+-#ifdef HAVE_PTP_ADJFREQ
+-		adapter->ptp_caps.adjfreq = igb_ptp_adjfreq_82576;
+-#else
+ 		adapter->ptp_caps.adjfine = igb_ptp_adjfine_82576;
+-#endif /* HAVE_PTP_ADJFREQ */
+ 		adapter->ptp_caps.adjtime = igb_ptp_adjtime_82576;
+ #ifdef HAVE_PTP_CLOCK_INFO_GETTIME64
+ 		adapter->ptp_caps.gettime64 = igb_ptp_gettime64_82576;
+@@ -1223,11 +1248,7 @@
+ 		adapter->ptp_caps.max_adj = 62499999;
+ 		adapter->ptp_caps.n_ext_ts = 0;
+ 		adapter->ptp_caps.pps = 0;
+-#ifdef HAVE_PTP_ADJFREQ
+-		adapter->ptp_caps.adjfreq = igb_ptp_adjfreq_82580;
+-#else
+ 		adapter->ptp_caps.adjfine = igb_ptp_adjfine_82580;
+-#endif /* HAVE_PTP_ADJFREQ */
+ 		adapter->ptp_caps.adjtime = igb_ptp_adjtime_82576;
+ #ifdef HAVE_PTP_CLOCK_INFO_GETTIME64
+ 		adapter->ptp_caps.gettime64 = igb_ptp_gettime64_82576;
+@@ -1267,11 +1288,7 @@
+ #ifdef HAVE_PTP_1588_CLOCK_PINS
+ 		adapter->ptp_caps.pin_config = adapter->sdp_config;
+ #endif /* HAVE_PTP_1588_CLOCK_PINS */
+-#ifdef HAVE_PTP_ADJFREQ
+-		adapter->ptp_caps.adjfreq = igb_ptp_adjfreq_82580;
+-#else
+ 		adapter->ptp_caps.adjfine = igb_ptp_adjfine_82580;
+-#endif /* HAVE_PTP_ADJFREQ */
+ 		adapter->ptp_caps.adjtime = igb_ptp_adjtime_i210;
+ #ifdef HAVE_PTP_CLOCK_INFO_GETTIME64
+ 		adapter->ptp_caps.gettime64 = igb_ptp_gettime64_i210;
+@@ -1412,13 +1429,16 @@
+ 		goto out;
+ 	}
+ 
+-	/* Re-initialize the timer. In case of i210/i211 SYSTIM alterations are performed
+- 	   once - during initialization procedure inside of igb_probe.*/
+-	if ((hw->mac.type != e1000_i210) && (hw->mac.type != e1000_i211)) {
++	/* Re-initialize the timer. */
++	if ((hw->mac.type == e1000_i210) || (hw->mac.type == e1000_i211)) {
++		struct timespec64 ts64 = ktime_to_timespec64(ktime_get_real());
++
++		igb_ptp_write_i210(adapter, &ts64);
++	} else {
+ 		timecounter_init(&adapter->tc, &adapter->cc,
+ 				 ktime_to_ns(ktime_get_real()));
+ 	}
+ out:
+ 	spin_unlock_irqrestore(&adapter->tmreg_lock, flags);
+ }
+-#endif /* HAVE_PTP_1588_CLOCK */
++#endif /* HAVE_PTP_1588_CLOCK */
+\ No newline at end of file

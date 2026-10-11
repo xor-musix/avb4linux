@@ -1,86 +1,68 @@
-descend = \
-	+mkdir -p $(OUTPUT)$(1) && \
-	$(MAKE) $(COMMAND_O) subdir=$(if $(subdir),$(subdir)/$(1),$(1)) $(PRINT_DIR) -C $(1) $(2)
+# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-FileCopyrightText: 2019 Ralf Beck
+# SPDX-FileCopyrightText: 2026 mnemonic powerplay <mnemonic@xor-musix.de>
+# Top-level build for avb4linux.
+#
+# All upstream code lives in git submodules whose sources are never edited:
+# the kernel module, gptp and shaper are built from staged copies with this
+# repo's patch overlay applied (kernel-module/snd-igb-avb/build,
+# daemons/gptp-build, daemons/OpenAvnu/build).
+#
+#   kernel-module/igb_avb      submodule: pristine Intel/Avnu igb_avb driver
+#   kernel-module/snd-igb-avb  overlay:   patches + ALSA/AVTP -> snd_igb_avb.ko
+#   daemons/OpenAvnu           submodule: mrpd, maap, shaper
+#   daemons/gptp               submodule: gPTP daemon (daemon_cl) + patch overlay
+#   jdksavdecc-c               submodule: AVDECC library (built on demand for avb-user)
 
-kernel_dir = /lib/modules/`uname -r`/build
-module_dir = `pwd`/kernel-module/igb
+OPENAVNU := daemons/OpenAvnu/daemons
+# gptp is built from a staged, patched copy of the daemons/gptp submodule
+# (daemons/check-gptp-baseline.sh stages into gptp-build/ and applies
+# daemons/gptp-patches/); the submodule itself is never edited in place.
+GPTP     := daemons/gptp-build/linux/build
+KMOD     := kernel-module/snd-igb-avb
+AVBHOME  ?= $(HOME)/.avb
+JDKSAVDECC := jdksavdecc-c/libjdksavdecc-c.a
 
-all: igb daemons_all avb-user
+.PHONY: all daemons mrpd maap shaper gptp snd_igb_avb avb-user jdksavdecc clean install help
 
-clean: igb_clean daemons_all_clean avb-user_clean
-
+all: snd_igb_avb daemons gptp avb-user
 
 help:
-	@echo 'Possible targets:'
-	@echo ''
-	@echo '  igb               - igb kernel module'
-	@echo ''
-	@echo '  daemons_all       - build all daemons (mrpd gptp maap shaper)'
-	@echo '  mrpd              - mrpd daemon'
-	@echo '  gptp              - gptp daemon for linux'
-	@echo '  maap              - maap daemon'
-	@echo '  shaper            - shaper daemon for linux'
-	@echo ''
-	@echo '  avb-user          - avb userspace client'
-	@echo ''
-	@echo 'Cleaning targets:'
-	@echo ''
-	@echo '  all of the above with the "_clean" string appended cleans'
-	@echo '    the respective build directory.'
-	@echo '  clean: a summary clean target to clean _all_ folders'
-	@echo ''
+	@echo 'Targets: all, snd_igb_avb, daemons (mrpd maap shaper gptp), avb-user, jdksavdecc, clean, install'
 
-igb: FORCE
-	cd $(module_dir)
-	make -C $(kernel_dir) M=$(module_dir)
+snd_igb_avb:
+	$(MAKE) -C $(KMOD) warning-check
 
-igb_clean:
-	$(call descend,kernel-module/igb/,clean)
-
-mrpd:
-	$(call descend,daemons/$@)
-
-mrpd_clean:
-	$(call descend,daemons/mrpd/,clean)
-
+daemons:
+	$(MAKE) -C daemons warning-check
 gptp:
-	ARCH=I210
-	$(call descend,daemons/$@/linux/build/)
+	@daemons/check-gptp-baseline.sh
 
-gptp_clean:
-	$(call descend,daemons/gptp/linux/build/,clean)
+# CMake >= 4 rejects jdksavdecc-c's old cmake_minimum_required without the
+# policy floor; 3.10 also avoids the "< 3.10" deprecation warning.  Built only
+# when the library is missing.
+jdksavdecc: $(JDKSAVDECC)
+$(JDKSAVDECC):
+	cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.10 -S jdksavdecc-c -B jdksavdecc-c
+	$(MAKE) -C jdksavdecc-c jdksavdecc-c
 
-maap:
-	$(call descend,daemons/$@/linux/build/)
+avb-user: $(JDKSAVDECC)
+	$(MAKE) -C tools
 
-maap_clean:
-	$(call descend,daemons/maap/linux/build/,clean)
+clean:
+	$(MAKE) -C $(KMOD) clean
+	$(MAKE) -C daemons clean
+	rm -rf daemons/gptp-build
+	$(MAKE) -C tools clean
 
-shaper:
-	$(call descend,daemons/$@)
-
-shaper_clean:
-	$(call descend,daemons/shaper/,clean)
-
-daemons_all: mrpd maap gptp shaper
-
-daemons_all_clean: mrpd_clean gptp_clean maap_clean shaper_clean
-
-avb-user:
-	$(call descend,tools/)
-
-avb-user_clean:
-	$(call descend,tools/,clean)
-
-install: all
-	mkdir -p $(HOME)/.avb
-	cp daemons/mrpd/mrpd $(HOME)/.avb
-	cp daemons/gptp/linux/build/obj/daemon_cl $(HOME)/.avb
-	cp daemons/maap/linux/build/maap_daemon $(HOME)/.avb
-	cp daemons/shaper/shaper_daemon $(HOME)/.avb
-	cp tools/avb-user $(HOME)/.avb
-	cp kernel-module/igb/igb_avb.ko $(HOME)/.avb
-	cp avb_up.sh /usr/local/bin
-	cp avb_down.sh /usr/local/bin
-
-.PHONY: FORCE
+install:
+	mkdir -p $(AVBHOME)
+	cp $(KMOD)/build/snd_igb_avb.ko $(AVBHOME)
+	cp daemons/OpenAvnu/build/daemons/mrpd/mrpd $(AVBHOME)
+	cp $(GPTP)/obj/daemon_cl $(AVBHOME)
+	cp $(OPENAVNU)/maap/linux/build/maap_daemon $(AVBHOME)
+	cp daemons/OpenAvnu/build/daemons/shaper/shaper_daemon $(AVBHOME)
+	cp tools/avb-user $(AVBHOME)
+# per-machine tuning hook: seeded once, never overwritten (user edits it)
+	[ -e $(AVBHOME)/avb-tuning.sh ] || cp avb_tuning.example.sh $(AVBHOME)/avb-tuning.sh
+	cp avb_up.sh avb_down.sh utils/avb_nm_unmanage.sh /usr/local/bin

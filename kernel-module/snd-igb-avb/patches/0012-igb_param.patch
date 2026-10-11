@@ -1,0 +1,12 @@
+diff -ruN a/igb_param.c b/igb_param.c
+--- a/igb_param.c	2026-06-04 22:35:35.965426114 +0200
++++ b/igb_param.c	2026-06-04 22:35:35.968090291 +0200
+@@ -643,7 +643,6 @@
+ 						    adapter);
+ 				if (adapter->rss_queues)
+ 					break;
+-				fallthrough;
+ 			case 0:
+ 				adapter->rss_queues = min_t(u32, opt.arg.r.max,
+ 							    num_online_cpus());
+

@@ -1,0 +1,252 @@
+--- a/igb.h	2026-10-10 00:38:44.256166968 +0200
++++ b/igb.h	2026-10-10 00:42:24.281980436 +0200
+@@ -36,6 +36,8 @@
+ #include <linux/pci.h>
+ #include <linux/netdevice.h>
+ #include <linux/vmalloc.h>
++#include <linux/dma-mapping.h>
++#include <linux/signal.h>
+ 
+ #ifdef SIOCETHTOOL
+ #include <linux/ethtool.h>
+@@ -178,7 +180,7 @@
+ #define IGB_TX_PTHRESH	((hw->mac.type == e1000_i354) ? 20 : 8)
+ #define IGB_TX_HTHRESH	1
+ #define IGB_RX_WTHRESH	((hw->mac.type == e1000_82576 && \
+-			  adapter->msix_entries) ? 1 : 4)
++			  adapter->msix_entries) ? 1 : 1)
+ 
+ /* this is the size past which hardware will drop packets when setting LPE=0 */
+ #define MAXIMUM_ETHERNET_VLAN_SIZE 1522
+@@ -524,6 +526,55 @@
+ #define IGB_RETA_SIZE	128
+ #endif /* ETHTOOL_GRXFHINDIR */
+ 
++#define MAX_AVB_STREAMS 32
++#define MAX_SUBSTREAMS 1
++
++#define TALKER_CONNECT		0
++#define LISTENER_CONNECT	1
++#define TALKER_DISCONNECT	2
++#define LISTENER_DISCONNECT	3
++#define SAMPLERATE_CHANGE	4
++#define AVB_CMD_SET_SYNC_STATE	5
++
++struct avb_stream {
++        uint64_t stream_id;
++        uint64_t expected_stream_id;
++        uint8_t dest_mac[6];
++        uint16_t vlan;
++        uint8_t sequence;
++        uint8_t dbc;
++        uint64_t format;
++        uint8_t channels;
++        uint16_t samplerate;
++        uint8_t src_mac[6];
++        int rx_filter_id;
++        uint8_t last_sequence;
++        uint8_t expected_dbc;
++        uint16_t ring_slice_base;
++        uint8_t ring_slice_chans;
++        int align_offset;
++        u64 rx_packets;
++        u64 rx_drops;
++        u64 rx_late_writes;
++        u64 rx_seq_errors;
++        int rx_last_seq_gap;
++        u8  rx_seq_seen;
++        s64 rx_ts_span_ns;
++        u64 rx_ts_frames;
++        u64 rx_pkts_at_ts;
++        u64 rx_clock_slips;
++        int rx_last_slip_ns;
++        u32 rx_last_ts;
++        u8  rx_ts_seen;
++        u64 rx_ts_span_snap[2];
++        u64 rx_ts_frames_snap[2];
++        int rx_snap_idx;
++        u64 rx_pkts_at_snap[2];
++        u8  rx_window_ready;
++        u32 rx_pkt_ts;
++        u8  rx_pkt_ts_seen;
++	};
++
+ /* board specific private data structure */
+ struct igb_adapter {
+ #ifdef HAVE_VLAN_RX_REGISTER
+@@ -561,6 +612,7 @@
+ 	u16 link_speed;
+ 	u16 link_duplex;
+ 	u8 port_num;
++
+ 	/* Interrupt Throttle Rate */
+ 	u32 rx_itr_setting;
+ 	u32 tx_itr_setting;
+@@ -570,7 +622,6 @@
+ 	struct work_struct dma_err_task;
+ 	bool fc_autoneg;
+ 	u8  tx_timeout_factor;
+-	bool is_detached;
+ 
+ #ifdef DEBUG
+ 	bool tx_hang_detected;
+@@ -691,6 +742,80 @@
+ 	u8 rss_indir_tbl[IGB_RETA_SIZE];
+ #endif
+ 	struct mutex lock;
++
++	u32     last_event;
++	u32     event;
++	wait_queue_head_t	wq;
++
++        void *addr;
++        dma_addr_t physaddr;
++        uint32_t size;
++
++        struct avb_stream streams_in[MAX_AVB_STREAMS];
++        struct avb_stream streams_out[MAX_AVB_STREAMS];
++
++        void *card;
++        void *pcm;
++
++        int rate;
++        int avb_listener_ready;
++        /* guards streams_in[] identities + flex filters; held across the whole RX drain */
++        spinlock_t rx_ident_lock;
++        int rx_lead_frames;
++        int rx_lead_filled;
++        int samples_per_packet;
++        int playback_channels;
++        int playback_period_size;
++        int playback_buffer_size;
++        int hw_playback_pointer;
++        int playback;
++        int p_cnt;
++
++        int capture_channels;
++        int capture_period_size;
++        int capture_buffer_size;
++        int hw_capture_pointer;
++        int capture;
++        int c_cnt;
++
++
++        void *tx_addr;
++        dma_addr_t tx_physaddr;
++
++        void *rx_addr;
++        dma_addr_t rx_physaddr;
++
++        struct hrtimer avb_tx_timer;
++        u64 tx_engine_ticks;
++        int tx_timer_active;
++        u64 tx_silence_packets;
++        u32 tx_phc_pres;
++        u64 tx_phc_launch;
++        u64 tx_late_launch;
++        u64 tx_xrun;
++        int tx_gated;
++        u64 tx_gated_ticks;
++        s64 tx_gptp_offset_ns;
++        u8 tx_seq;
++        u8 tx_dbc;
++        u16 tx_avb_desc_group;
++        u64 tx_next_launch_ns;
++        u32 tx_period_acc;
++        u32 avb_tx_groups;
++        u32 tx_dma_bytes;
++
++        u32 rx_desc_backlog;
++        u32 rx_desc_backlog_max;
++        u64 rx_ring_near_lap;
++        u64 rx_budget_hits;
++        u64 rx_packets_total;
++        u64 capture_frames_total;
++        int rx_last_pres_delta_ns;
++        int rx_last_launch_delta_ns;
++
++	u32 aggregate_idleslope_bps;
++	u32 reserved_bw_permille;
++	u32 num_streams;
+ };
+ 
+ #ifdef CONFIG_IGB_VMDQ_NETDEV
+@@ -799,6 +924,8 @@
+ extern char igb_driver_name[];
+ extern char igb_driver_version[];
+ 
++extern int igb_open(struct net_device *netdev);
++extern int igb_close(struct net_device *netdev);
+ extern void igb_up(struct igb_adapter *);
+ extern void igb_down(struct igb_adapter *);
+ extern void igb_reinit_locked(struct igb_adapter *);
+@@ -833,6 +960,8 @@
+ extern void igb_ptp_tx_work(struct work_struct *work);
+ extern void igb_ptp_rx_hang(struct igb_adapter *adapter);
+ extern void igb_ptp_tx_hwtstamp(struct igb_adapter *adapter);
++extern void igb_ptp_read_i210(struct igb_adapter *adapter,
++                              struct timespec64 *ts);
+ extern void igb_ptp_rx_rgtstamp(struct igb_q_vector *q_vector,
+ 				struct sk_buff *skb);
+ extern void igb_ptp_rx_pktstamp(struct igb_q_vector *q_vector,
+@@ -859,6 +988,13 @@
+ 
+ int igb_ptp_set_ts_config(struct net_device *netdev, struct ifreq *ifr);
+ int igb_ptp_get_ts_config(struct net_device *netdev, struct ifreq *ifr);
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,6,0)
++int igb_ptp_hwtstamp_get(struct net_device *netdev,
++			 struct kernel_hwtstamp_config *config);
++int igb_ptp_hwtstamp_set(struct net_device *netdev,
++			 struct kernel_hwtstamp_config *config,
++			 struct netlink_ext_ack *extack);
++#endif
+ #ifdef IGB_HWMON
+ void igb_sysfs_exit(struct igb_adapter *adapter);
+ int igb_sysfs_init(struct igb_adapter *adapter);
+@@ -896,6 +1032,13 @@
+ #define IGB_IOCTL_MAP_RX_RING   _IOW('E', 307, int)
+ #define IGB_IOCTL_UNMAP_RX_RING _IOW('E', 308, int)
+ 
++#define IGB_IOCTL_MCAST_BASE			_IOW('E', 401, int)
++#define IGB_IOCTL_SET_SYNC_STREAM		_IOW('E', 401, int)
++#define IGB_IOCTL_CLR_SYNC_STREAM		_IOW('E', 402, int)
++#define IGB_IOCTL_TALKER_JOIN			_IOW('E', 403, int)
++#define IGB_IOCTL_TALKER_LEAVE			_IOW('E', 404, int)
++#define IGB_IOCTL_LISTENER_JOIN			_IOW('E', 405, int)
++#define IGB_IOCTL_LISTENER_LEAVE		_IOW('E', 406, int)
+ 
+ /*END*/
+ 
+@@ -934,4 +1077,30 @@
+ 	u32	uring_rx_init;
+ };
+ 
+-#endif /* _IGB_H_ */
++struct igb_avb_tx_desc {
++    u64 launch_time;
++    u64 cmd1;
++    u64 addr;
++    u64 cmd2;
++};
++
++struct igb_avb_mcast_base {
++    char mcast_base[6];
++};
++
++struct igb_avb_sync_stream {
++    char stream_id[8];
++};
++
++struct igb_avb_talker_listener {
++    char id[8];
++    char mcast_address[6];
++};
++
++int igb_setup_flex_filter(struct igb_adapter *adapter, unsigned int queue_id,
++			  unsigned int filter_id, unsigned int filter_len,
++			  u_int8_t *filter, u_int8_t *mask);
++
++int igb_clear_flex_filter(struct igb_adapter *adapter, unsigned int filter_id);
++
++#endif /* _IGB_H_ */
+\ No newline at end of file

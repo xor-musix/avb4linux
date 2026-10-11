@@ -1,0 +1,7 @@
+# N=12, 96ch: uid != k in SW demux on one device.  Listener 9 still gets our
+# TX 9: TX 9 -> 16A input 10 -> 16A uid 10 -> our input 9.
+# our-streams  host   device-streams
+0-8            16a    0-8
+9              16a    10
+10             16a    9
+11             16a    11

@@ -1,0 +1,20 @@
+diff -ruN a/e1000_phy.c b/e1000_phy.c
+--- a/e1000_phy.c	2026-06-04 22:35:35.950550913 +0200
++++ b/e1000_phy.c	2026-06-04 22:35:35.952013613 +0200
+@@ -1216,7 +1216,6 @@
+ 			phy_data |= M88E1000_PSCR_AUTO_X_1000T;
+ 			break;
+ 		}
+-		fallthrough;
+ 	case 0:
+ 	default:
+ 		phy_data |= M88E1000_PSCR_AUTO_X_MODE;
+@@ -3299,7 +3298,6 @@
+ 		E1000_WRITE_REG(hw, E1000_MPHY_ADDR_CTRL,
+ 				E1000_MPHY_DIS_ACCESS);
+ 	}
+-
+ 	return E1000_SUCCESS;
+ }
+ 
+

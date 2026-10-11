@@ -1,0 +1,6 @@
+shaper_daemon.c: warning: 'strncpy' output may be truncated copying 2 bytes from a string of length 4 [-Wstringop-truncation]
+shaper_daemon.c: warning: the comparison will always evaluate as 'false' for the address of 'stream_da' will never be NULL [-Waddress]
+shaper_log_linux.c: warning: '%s' directive writing up to 1023 bytes into a region of size between 978 and 1017 [-Wformat-overflow=]
+shaper_log_linux.c: warning: 'strncpy' output may be truncated copying 256 bytes from a string of length 1023 [-Wstringop-truncation]
+shaper_log_linux.c: warning: assignment discards 'const' qualifier from pointer target type [-Wdiscarded-qualifiers]
+shaper_log_linux.c: warning: initialization discards 'const' qualifier from pointer target type [-Wdiscarded-qualifiers]

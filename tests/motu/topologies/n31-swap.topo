@@ -1,0 +1,10 @@
+# N=31 with the 24Ai and 242Ai swapped against n31, to tell a device fault from
+# a stream-index fault: n31 SECS=240 had 3 single-packet "copy of 64 frames
+# earlier" events, all on the 24Ai (our streams 16-18).  If they follow the
+# 24Ai here they show on streams 20-23; if they stay on 16-18 it is us.
+# our-streams  host   device-streams
+0-15           16a    0-15
+16-19          242ai  0-3
+20-23          24ai   0-3
+24-27          828es  0-3
+28-30          ulavb  0-2

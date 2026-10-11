@@ -35,10 +35,6 @@
 #ifndef _MAAP_CLIENT_H_
 #define _MAAP_CLIENT_H_
 
-/*
- * simple_talker MRP client part
- */
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -53,15 +49,12 @@
 
 #include <maap_iface.h>
 
-/* global defines */
-
 #define MAAP_PORT_DEFAULT 15364
-
-// all
 
 struct maap_record {
   uint64_t base;
   uint count;
+  int id;
 };
 
 int maap_client_init(struct maap_record* context);
@@ -70,4 +63,4 @@ int maap_acquire_adresses(struct maap_record* ctx);
 int maap_release_adresses(struct maap_record* ctx);
 
 
-#endif /* _TALKER_MRP_CLIENT_H_ */
+#endif
