@@ -97,6 +97,26 @@ and exported for `avb-user`. No rebuild is needed when they change.
 - A source MAC given on the command line wins over the conf:
   `sudo AVB_DEVICE_SOURCE_MAC=... avb_up.sh ...`.
 
+### Why one device's MACs are still required
+
+All TX streams and RX streams 1..N-1 are set up at runtime (MAAP, ACMP). Only one
+remote device, the talker of our RX stream 0, still has to be configured:
+
+- **Capture clock:** RX stream 0 drives the ALSA capture pointer, so the kernel
+  refuses capture `START` until stream 0 has an identity. ACMP only binds a
+  stream once a controller connects it, which may be after the DAW opens the
+  card, or never. The two MACs give stream 0 a static identity at module load:
+  destination `AVB_DEVICE_TALKER_MAC_BASE`, source `AVB_DEVICE_SOURCE_MAC`,
+  stream ID = source MAC + index 0. With that identity `avb-user` can also
+  attach the MSRP listener to the stream without a controller.
+- **AECP target:** `avb-user` sends its AEM commands (such as setting the sample
+  rate) only to the entity of `AVB_DEVICE_SOURCE_MAC`. It is also the default
+  peer of every stream. In multi-device setups it must be the device behind RX
+  stream 0, and the other devices' rates are set by hand.
+
+Nothing selects this device from ADP/ACMP discovery yet, so `avb-user` refuses to
+start without both MACs.
+
 ### Detect them automatically (experimental)
 
 Run with the AVB device connected and the stock driver still loaded (BEFORE
