@@ -180,6 +180,61 @@ sudo avb_down.sh <interface> [--restore-nm]
 The card is `hw:igbavb`. If PipeWire/WirePlumber opens it, a DAW gets "device
 busy". `avb_tuning.example.sh` shows how to disable the card in WirePlumber.
 
+### Diagnostics and logging
+
+Currently, logging is `verbose`, hence expect a lot in the logs!
+
+To inspect the user space logging, run:
+```sh
+journalctl -t gptp -t mrpd -t maap -t shaper -t avb-user -f
+```
+
+To inspect the kernel logging, run:
+```sh
+sudo dmesg -w | grep 'igb'
+```
+
+### System audio
+
+#### ALSA
+
+The easiest way to use AVB Talker and Listener for playback and recording audio with applications like `Audacity`, `Ardour`, `Reaper`, etc., is to use ALSA directly.
+
+Check for ALSA playback devices:
+```sh
+aplay -l
+**** List of PLAYBACK Hardware Devices ****
+card 0: igbavb [Intel igb AVB], device 0: AVB [igb AVB 128ch S32_LE]
+  Subdevices: 0/1
+  Subdevice #0: subdevice #0
+```
+
+Check for ALSA capture devices:
+```sh
+arecord -l
+**** List of CAPTURE Hardware Devices ****
+card 0: igbavb [Intel igb AVB], device 0: AVB [igb AVB 128ch S32_LE]
+  Subdevices: 0/1
+  Subdevice #0: subdevice #0
+```
+
+#### Audio server
+
+##### JACK Audio Connection Kit
+
+To run the Jack daemon, for `--num-streams 16`, use the following command:
+```sh
+jackd -d alsa -d hw:igbavb -r 48000 -p 256 -n 3 -i 128 -o 128
+```
+
+##### PulseAudio
+
+Not tested yet. It is recommended to use JACK Audio Connection Kit instead.
+
+##### PipeWire
+
+Not tested yet. It is recommended to use JACK Audio Connection Kit instead.
+
 ### Real-time priorities and per-machine tuning
 
 `avb_up.sh` ranks the AVB stack above a DAW's audio threads (REAPER defaults to
