@@ -23,12 +23,15 @@ KMOD     := kernel-module/snd-igb-avb
 AVBHOME  ?= $(HOME)/.avb
 JDKSAVDECC := jdksavdecc-c/libjdksavdecc-c.a
 
-.PHONY: all daemons mrpd maap shaper gptp snd_igb_avb avb-user jdksavdecc clean install help
+.PHONY: all daemons mrpd maap shaper gptp snd_igb_avb avb-user jdksavdecc check-submodules clean install help
 
+# The submodule check runs last so its warning ends up at the bottom of the
+# build output; it is advisory only (AVB_SKIP_SUBMODULE_CHECK=1 skips it).
 all: snd_igb_avb daemons gptp avb-user
+	@utils/check-submodule-updates.sh
 
 help:
-	@echo 'Targets: all, snd_igb_avb, daemons (mrpd maap shaper gptp), avb-user, jdksavdecc, clean, install'
+	@echo 'Targets: all, snd_igb_avb, daemons (mrpd maap shaper gptp), avb-user, jdksavdecc, check-submodules, clean, install'
 
 snd_igb_avb:
 	$(MAKE) -C $(KMOD) warning-check
@@ -48,6 +51,10 @@ $(JDKSAVDECC):
 
 avb-user: $(JDKSAVDECC)
 	$(MAKE) -C tools
+
+# Warn when a submodule is no longer pinned to the latest upstream commit.
+check-submodules:
+	@utils/check-submodule-updates.sh
 
 clean:
 	$(MAKE) -C $(KMOD) clean

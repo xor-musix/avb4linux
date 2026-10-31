@@ -60,6 +60,11 @@ sudo make install
   jdksavdecc-c library is built first if it is missing.
 - `make` runs three warning-baseline checks (kernel module, shaper, gptp). New
   compiler warnings fail the build.
+- At the end, `make` warns about every submodule that is no longer pinned to the
+  latest upstream commit, as a hint to check that upstream repo for important
+  updates. The check is advisory, never fails the build, and skips remotes it
+  cannot reach. Run it on its own with `make check-submodules`, or skip it with
+  `AVB_SKIP_SUBMODULE_CHECK=1 make`.
 - `make install` copies the binaries to `$AVBHOME` and `avb_up.sh`, `avb_down.sh`
   and `avb_nm_unmanage.sh` to `/usr/local/bin`.
 - The other submodules (`utils/libpcap`, `utils/tcpdump`) are only needed for
