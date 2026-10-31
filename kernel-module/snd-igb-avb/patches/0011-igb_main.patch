@@ -420,6 +420,15 @@
  #ifdef HAVE_NET_DEVICE_OPS
  	netdev->netdev_ops = &igb_netdev_ops;
  #else /* HAVE_NET_DEVICE_OPS */
+@@ -2818,7 +2835,7 @@
+ 	netdev->watchdog_timeo = 5 * HZ;
+ #endif
+ 
+-	strncpy(netdev->name, pci_name(pdev), sizeof(netdev->name) - 1);
++	strscpy(netdev->name, pci_name(pdev), sizeof(netdev->name));
+ 
+ 	adapter->bd_number = cards_found;
+ 
 @@ -2931,11 +2948,11 @@
  	/* copy the MAC address out of the NVM */
  	if (e1000_read_mac_addr(hw))
@@ -445,6 +454,15 @@
  	adapter->devrc = 0;
  
  #ifdef HAVE_I2C_SUPPORT
+@@ -3074,7 +3087,7 @@
+ 	 */
+ 	igb_get_hw_control(adapter);
+ 
+-	strncpy(netdev->name, "eth%d", IFNAMSIZ);
++	strscpy(netdev->name, "eth%d", sizeof(netdev->name));
+ 	err = register_netdev(netdev);
+ 	if (err)
+ 		goto err_register;
 @@ -3258,9 +3271,8 @@
  	igb_ptp_stop(adapter);
  #endif /* HAVE_PTP_1588_CLOCK */
