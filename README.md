@@ -11,7 +11,7 @@ Upstream code is pulled in as git submodules whose sources are never edited. The
 build copies the kernel driver, gptp and the shaper into staging trees
 (`kernel-module/snd-igb-avb/build`, `daemons/gptp-build`, `daemons/OpenAvnu/build`)
 and applies this repository's patch overlay there. The one exception is
-`utils/build-tcpdump-for-motu.sh`, which patches `utils/libpcap` in place.
+`utils/motu/build-tcpdump-for-motu.sh`, which patches `utils/libpcap` in place.
 
 | Path | Submodule | Role |
 |------|-----------|------|
@@ -23,8 +23,8 @@ and applies this repository's patch overlay there. The one exception is
 | `include`                   | —            | `stream_id.h`, shared by the kernel module and `avb-user` |
 | `tools`                     | —            | `avb-user` user-space app (ADP/AECP/ACMP, MSRP/MAAP clients, status screen) |
 | `tests`                     | —            | test harnesses and throughput tools, see [tests/README.md](tests/README.md) |
-| `utils`                     | —            | setup and developer helpers: MAC detection, NetworkManager hand-over, [network-config](utils/network-config/README.md), pcap/WAV analysis, static tcpdump build for MOTU devices |
-| `utils/libpcap`, `utils/tcpdump` | the-tcpdump-group | sources for the MOTU tcpdump build (`utils/build-tcpdump-for-motu.sh`) |
+| `utils`                     | —            | setup and developer helpers: MAC detection, NetworkManager hand-over, [network-config](utils/network-config/README.md), pcap/WAV analysis |
+| `utils/libpcap`, `utils/tcpdump` | the-tcpdump-group | sources for the MOTU tcpdump build (`utils/motu/build-tcpdump-for-motu.sh`) |
 
 Scripts:
 
@@ -34,6 +34,7 @@ Scripts:
 | `avb_tuning.example.sh` | template for the per-machine tuning hook |
 | `utils/avb_autoconfig.sh`, `utils/avb_apply_mac.sh` | detect / set the AVB device MACs (run from the repo) |
 | `utils/avb_nm_unmanage.sh` | hand the AVB port over from NetworkManager (installed) |
+| `utils/check-prerequisites.sh` | verify system requirements before building/running AVB4Linux |
 
 Known issues: [kernel-module/snd-igb-avb/KNOWN_ISSUES.md](kernel-module/snd-igb-avb/KNOWN_ISSUES.md).
 
@@ -68,7 +69,7 @@ sudo make install
 - `make install` copies the binaries to `$AVBHOME` and `avb_up.sh`, `avb_down.sh`
   and `avb_nm_unmanage.sh` to `/usr/local/bin`.
 - The other submodules (`utils/libpcap`, `utils/tcpdump`) are only needed for
-  `utils/build-tcpdump-for-motu.sh`, which initializes them itself.
+  `utils/motu/build-tcpdump-for-motu.sh`, which initializes them itself.
 
 ### Where the runtime files live (`$AVBHOME`)
 
