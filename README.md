@@ -81,8 +81,8 @@ running the command. Under `sudo`, `$HOME` is normally reset to root's home, so
 
 ## Configure the AVB device MACs
 
-Do this once before the first `avb_up.sh`. `avb-user` refuses to start without
-the remote device's MACs, which have no default. They are runtime parameters,
+**Do this once before the first `avb_up.sh`. `avb-user` refuses to start without
+the remote device's MACs, which have no default.** They are runtime parameters,
 read from `$AVBHOME/avb-macs.conf` by `avb_up.sh`, passed to the kernel module
 and exported for `avb-user`. No rebuild is needed when they change.
 

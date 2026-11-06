@@ -40,15 +40,14 @@ set -e
 DROPIN=/etc/NetworkManager/conf.d/99-avb-unmanaged.conf
 KEY=unmanaged-devices
 
-usage() { echo "usage: $0 [-r|--restore] <interface>" >&2; exit 2; }
+usage() { echo "usage: $0 [-r|--restore] [interface]" >&2; exit 2; }
 
 RESTORE=0
 case "$1" in
     -r|--restore) RESTORE=1; shift ;;
     -h|--help)    usage ;;
 esac
-IFACE=$1
-[ -n "$IFACE" ] || usage
+IFACE=${1:-enp5s0}
 
 # Re-exec under sudo if not root (we write under /etc and talk to NM).
 if [ "$(id -u)" -ne 0 ]; then

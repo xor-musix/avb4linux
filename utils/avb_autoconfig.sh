@@ -11,10 +11,13 @@
 #   AVB_DEVICE_TALKER_MAC_BASE = its talker stream multicast              -> sniffed
 #
 # Run as root (raw capture).  Usage:
-#   sudo ./utils/avb_autoconfig.sh <interface> [seconds] [name-match]
-#     interface   NIC to read OWN_MAC from and sniff on   (default enp5s0)
-#     seconds     capture duration                         (default 60)
-#     name-match  preferred AVDECC entity-name substring   (default: none -> busiest)
+#   sudo ./utils/avb_autoconfig.sh [options]
+#     Options:
+#       --iface <interface>   NIC to read OWN_MAC from and sniff on   (default enp5s0)
+#       --duration <seconds>  capture duration                         (default 60)
+#       --match <name>        preferred AVDECC entity-name substring   (default: none -> busiest)
+#     Positional arguments still supported for backward compatibility:
+#       <interface> [seconds] [name-match]
 #
 # Prereqs: the AVB device powered, cabled to the i210, AVB enabled on that port, and
 #          the stock igb driver still loaded -- run this BEFORE avb_up.sh.  Needs tshark.
@@ -25,9 +28,55 @@
 # that actually advertises a talker stream. The talker base is the MSRP-advertised
 # stream destination (stream_da), else the MAAP-announced reserved base.
 set -e
-IFACE=${1:-enp5s0}
-SECS=${2:-60}
-WANT=${3:-}
+
+# Parse named arguments first, then fall back to positional
+IFACE=""
+SECS=""
+WANT=""
+
+# Handle named parameters
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --iface)
+      IFACE="$2"
+      shift 2
+      ;;
+    --duration)
+      SECS="$2"
+      shift 2
+      ;;
+    --match)
+      WANT="$2"
+      shift 2
+      ;;
+    --help)
+      echo "Usage: $0 [options]"
+      echo "Options:"
+      echo "  --iface <interface>   NIC to read OWN_MAC from and sniff on   (default enp5s0)"
+      echo "  --duration <seconds>  capture duration                         (default 60)"
+      echo "  --match <name>        preferred AVDECC entity-name substring   (default: none -> busiest)"
+      exit 0
+      ;;
+    -h|--help)
+      echo "Usage: $0 [options]"
+      echo "Options:"
+      echo "  --iface <interface>   NIC to read OWN_MAC from and sniff on   (default enp5s0)"
+      echo "  --duration <seconds>  capture duration                         (default 60)"
+      echo "  --match <name>        preferred AVDECC entity-name substring   (default: none -> busiest)"
+      exit 0
+      ;;
+    *)
+      # Positional arguments (backward compatibility)
+      break
+      ;;
+  esac
+done
+
+# Apply positional arguments if not set via named parameters
+# (these will override named params if provided as positional)
+IFACE=${IFACE:-${1:-enp5s0}}
+SECS=${SECS:-${2:-60}}
+WANT=${WANT:-${3:-}}
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 norm() { echo "$1" | tr -d ':-' | tr 'A-F' 'a-f'; }
